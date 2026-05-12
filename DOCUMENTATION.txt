@@ -1,0 +1,1702 @@
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║          FACE RECOGNITION WEB APPLICATION — COMPLETE DOCUMENTATION                  ║
+║          Every detail, every dependency, every connection explained.                 ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
+
+Written for: Beginners and intermediate developers
+Covers: Architecture, dependencies, data flow, examples, troubleshooting
+Last updated: 2026-03-29
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TABLE OF CONTENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1.  What This App Does (Plain English)
+  2.  Big Picture Architecture
+  3.  Complete Project File Structure
+  4.  How It Works — Step by Step Flow
+  5.  Backend Dependencies (Python) — Every Package Explained
+  6.  Frontend Dependencies (JavaScript) — Every Package Explained
+  7.  How All Dependencies Are Connected to Each Other
+  8.  The Face Recognition Pipeline (Deep Dive)
+  9.  Backend API Endpoints — Every Route Explained
+  10. Frontend Components — Every File Explained
+  11. The Second Monitor / Display Window Feature
+  12. The USB Camera System
+  13. Data Storage — What Gets Saved Where
+  14. Configuration & Tuning
+  15. Common Errors and Fixes
+  16. Glossary of Terms
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1 — WHAT THIS APP DOES (PLAIN ENGLISH)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  This is a real-time face recognition web application. Here is what happens when
+  you run it:
+
+  1. Your webcam (built-in or USB) turns on inside a browser tab.
+  2. Every 1.5 seconds, a photo is silently taken from the video stream.
+  3. That photo is sent to a Python server running on your computer.
+  4. The Python server:
+       a. Detects if there is a face in the photo.
+       b. If yes, generates a mathematical "fingerprint" of that face.
+       c. Compares that fingerprint against all stored fingerprints.
+       d. Decides WHO the person is (or says "Unknown").
+  5. The result is sent back to the browser.
+  6. The browser:
+       a. Draws a green/red box around the face.
+       b. Shows the person's name and a custom greeting message.
+       c. SPEAKS the message out loud using your computer's voice.
+  7. If you have two monitors, you can "pop out" a full-screen display window
+     onto your second screen that shows who was recognized in large text.
+
+  EXAMPLE:
+    - You register "Ayush" with 5 photos.
+    - Ayush walks in front of the camera.
+    - The screen shows: "✅ AYUSH" with a green box around his face.
+    - A voice says: "Welcome Ayush! Great to see you!"
+    - Your second monitor shows a large animated "AYUSH — Welcome!" screen.
+    - All of this is logged with a timestamp.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2 — BIG PICTURE ARCHITECTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  The app is split into two separate programs that talk to each other:
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                        YOUR COMPUTER                                │
+  │                                                                     │
+  │   ┌──────────────────────┐       HTTP/REST       ┌───────────────┐ │
+  │   │   FRONTEND (React)   │ ◄──────────────────── │   BACKEND     │ │
+  │   │   Port 3000          │ ──────────────────────►│   (Flask)     │ │
+  │   │   Browser-based      │    sends image/gets   │   Port 5000   │ │
+  │   │   JavaScript/HTML    │    result back        │   Python      │ │
+  │   └──────────────────────┘                       └───────────────┘ │
+  │           │                                              │          │
+  │           │ BroadcastChannel                            │ uses     │
+  │           ▼ (no server needed)                          ▼          │
+  │   ┌──────────────────────┐               ┌─────────────────────┐  │
+  │   │  DISPLAY WINDOW      │               │  AI MODELS          │  │
+  │   │  Second Monitor      │               │  MTCNN (detection)  │  │
+  │   │  Full-screen view    │               │  FaceNet (identity) │  │
+  │   └──────────────────────┘               └─────────────────────┘  │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  FRONTEND (React) responsibilities:
+    - Show the live camera feed
+    - Capture frames and send them to the backend
+    - Display recognition results (name, box, banner)
+    - Speak the greeting using browser's voice API
+    - Show the Persons, Log, Messages management tabs
+    - Communicate with the Display Window via BroadcastChannel
+
+  BACKEND (Flask + Python) responsibilities:
+    - Receive image frames from the browser
+    - Detect faces using MTCNN
+    - Generate face embeddings using FaceNet
+    - Compare embeddings to find the matching person
+    - Return the result as JSON
+    - Manage the dataset (add/delete persons)
+    - Store and serve logs and custom messages
+
+  COMMUNICATION PROTOCOL:
+    - Frontend sends: POST request with image as base64 string
+    - Backend returns: JSON like {"name": "Ayush", "confidence": 0.87, "box": [x,y,w,h]}
+    - This is called a REST API (Representational State Transfer)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3 — COMPLETE PROJECT FILE STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  FaceRecognition 2/
+  │
+  ├── README.md                    ← Quick-start instructions
+  ├── DOCUMENTATION.txt            ← This file
+  │
+  ├── backend/
+  │   ├── venv/                    ← Python virtual environment (auto-created)
+  │   │                              Contains isolated Python installation with
+  │   │                              all packages. Never edit this manually.
+  │   │
+  │   ├── dataset/                 ← WHERE YOU PUT FACE PHOTOS
+  │   │   ├── Ayush/               ← One folder per person (name = folder name)
+  │   │   │   ├── img1.jpg         ← 3-5 photos per person recommended
+  │   │   │   ├── img2.jpg
+  │   │   │   └── img3.jpg
+  │   │   └── Rahul/
+  │   │       ├── photo1.jpg
+  │   │       └── photo2.jpg
+  │   │
+  │   ├── embeddings/              ← AUTO-GENERATED. Do not edit manually.
+  │   │   └── embeddings.pkl       ← Saved face "fingerprints" as a binary file
+  │   │                              Created after first recognition run.
+  │   │                              If deleted, will be rebuilt from dataset/.
+  │   │
+  │   ├── models/                  ← Reserved for future model storage
+  │   │
+  │   ├── src/
+  │   │   ├── app.py               ← MAIN SERVER FILE. The Flask web server.
+  │   │   │                          Run this to start the backend.
+  │   │   │                          Defines all API routes (URLs the frontend calls).
+  │   │   │
+  │   │   ├── recognition.py       ← THE BRAIN. Core AI engine.
+  │   │   │                          Loads MTCNN + FaceNet models.
+  │   │   │                          Detects faces, generates embeddings,
+  │   │   │                          compares and identifies people.
+  │   │   │
+  │   │   └── utils.py             ← Helper functions.
+  │   │                              Converts base64 strings to images,
+  │   │                              saves images to disk, resizes images.
+  │   │
+  │   ├── custom_messages.json     ← EDITABLE. Your custom greetings.
+  │   │                              Example: {"Ayush": "Welcome Ayush!"}
+  │   │                              Edit via the Messages tab in the UI,
+  │   │                              or open this file directly in any text editor.
+  │   │
+  │   ├── face_log.json            ← AUTO-GENERATED. Recognition history.
+  │   │                              Stores last 1000 recognition events
+  │   │                              with person name, confidence, timestamp.
+  │   │
+  │   └── requirements.txt         ← List of all Python packages needed.
+  │                                  Run: pip install -r requirements.txt
+  │
+  └── frontend/
+      ├── node_modules/            ← AUTO-GENERATED by npm install.
+      │                              Contains all JavaScript libraries.
+      │                              Never edit manually. ~300MB typical size.
+      │
+      ├── public/
+      │   └── index.html           ← The single HTML page. React mounts into
+      │                              the <div id="root"> element inside this file.
+      │
+      ├── src/
+      │   ├── index.js             ← Entry point. Starts React, mounts App.js
+      │   │                          into the HTML page.
+      │   │
+      │   ├── App.js               ← ROOT COMPONENT. Controls everything:
+      │   │                          - Tab navigation
+      │   │                          - API health check
+      │   │                          - BroadcastChannel (second screen comm)
+      │   │                          - Speech synthesis
+      │   │                          - "Pop Out Display" button logic
+      │   │
+      │   ├── App.css              ← ALL STYLES for the entire app.
+      │   │                          Dark theme, animations, responsive layout.
+      │   │
+      │   └── components/
+      │       ├── Camera.js        ← Camera feed + frame capture + overlay canvas.
+      │       │                      Handles getUserMedia, USB camera detection,
+      │       │                      hot-plug events, bounding box drawing.
+      │       │
+      │       ├── MessageBanner.js ← The green/red card shown below the camera.
+      │       │                      Displays name, message, confidence bar.
+      │       │
+      │       ├── AddPerson.js     ← Modal popup for registering new people.
+      │       │                      Supports file upload AND live camera capture.
+      │       │
+      │       ├── FaceLog.js       ← Recognition history table.
+      │       │                      Auto-refreshes every 10 seconds.
+      │       │
+      │       └── DisplayWindow.js ← FULL-SCREEN second monitor display.
+      │                              Shows large animated recognition results.
+      │                              Rendered when URL contains ?mode=display
+      │
+      └── package.json             ← Project config + list of npm dependencies.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4 — HOW IT WORKS — STEP BY STEP FLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ── STARTUP FLOW ──────────────────────────────────────────────────────────────────
+
+  Step 1: You run "python src/app.py"
+    → Flask starts a web server on port 5000
+    → FaceRecognitionEngine is created (this loads MTCNN and FaceNet models into RAM)
+    → If embeddings.pkl exists: loads saved fingerprints from disk
+    → If embeddings.pkl does NOT exist but dataset/ has photos: builds fingerprints now
+    → Server is now ready to accept requests
+
+  Step 2: You run "npm start"
+    → React development server starts on port 3000
+    → Opens your browser automatically at http://localhost:3000
+    → App.js runs, checks if API is alive (GET /health)
+    → Fetches list of known persons (GET /persons)
+    → Fetches custom messages (GET /custom-messages)
+    → "API online" indicator turns green in the header
+
+  ── ADDING A PERSON FLOW ──────────────────────────────────────────────────────────
+
+  Example: Adding "Ayush" with 3 photos
+
+  Step 1: User clicks "+ Add Person" button
+    → AddPerson.js modal opens
+
+  Step 2: User types "Ayush" and uploads 3 photos (or captures via camera)
+    → Files are stored in memory as JavaScript File objects
+
+  Step 3: User clicks "Register Ayush (3 photos)"
+    → AddPerson.js creates a FormData object with name="Ayush" + 3 image files
+    → Axios sends POST request to http://localhost:5000/add-person
+
+  Step 4: Flask receives the request in app.py (route: /add-person)
+    → Saves the 3 photos to backend/dataset/Ayush/img1.jpg, img2.jpg, img3.jpg
+    → Calls engine.add_person("Ayush")
+              
+  Step 5: Inside recognition.py, add_person() runs:
+    → For each photo (img1.jpg, img2.jpg, img3.jpg):
+        a. OpenCV reads the image from disk → numpy array (numbers representing pixels)
+        b. MTCNN detects the face → gives bounding box [x, y, w, h]
+        c. Face is cropped from the image
+        d. Cropped face is resized to exactly 160×160 pixels
+        e. FaceNet processes the 160×160 face → produces a 512-number array (embedding)
+           Example embedding: [0.23, -0.41, 0.87, 0.12, ... ] (512 numbers total)
+    → All 3 embeddings are stored: {"Ayush": [emb1, emb2, emb3]}
+    → Saved to embeddings.pkl on disk using pickle
+
+  Step 6: app.py adds a default message to custom_messages.json:
+    {"Ayush": "Welcome Ayush!"}
+
+  Step 7: Response sent back to browser:
+    {"message": "Successfully registered 'Ayush' with 3 images.", "name": "Ayush"}
+
+  Step 8: Browser shows success, modal closes, persons list refreshes
+
+  ── RECOGNITION FLOW ──────────────────────────────────────────────────────────────
+
+  This happens every 1.5 seconds while camera is running.
+
+  Step 1: Camera.js captures a video frame
+    → Gets the current video frame using HTML Canvas
+    → canvas.getContext('2d').drawImage(video, 0, 0)
+    → Converts to base64 JPEG string
+       (base64 is a way to represent binary image data as text characters)
+       Example: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAA..."
+
+  Step 2: Camera.js sends the image to the backend
+    → axios.post('http://localhost:5000/recognize', { image: base64string })
+    → This is an HTTP POST request — like submitting a form but programmatically
+
+  Step 3: app.py receives the request at /recognize route
+    → Extracts the base64 string from the JSON body
+    → Calls utils.decode_base64_image() to convert it back to a pixel array
+    → Calls engine.recognize(frame) — the recognition engine
+
+  Step 4: Inside recognition.py, recognize() runs:
+
+    a. FACE DETECTION:
+       → MTCNN scans the image looking for faces
+       → MTCNN is a neural network trained to find face-shaped patterns
+       → If it finds a face, returns: {"box": [x, y, w, h], "confidence": 0.998}
+       → x, y = top-left corner of face in pixels
+       → w, h = width and height of face box in pixels
+       Example: box = [120, 45, 180, 200]  (face starts at pixel 120,45 and is 180x200px)
+
+    b. FACE CROPPING:
+       → Cuts out just the face area from the image
+       → Adds 10px padding around the face for context
+       → face = image[y:y+h, x:x+w]
+
+    c. PREPROCESSING:
+       → Resizes face to exactly 160×160 pixels (FaceNet's required input size)
+       → Converts pixel values to float32 numbers
+
+    d. EMBEDDING GENERATION:
+       → FaceNet neural network processes the 160×160 face image
+       → Produces a 512-dimensional embedding vector
+       → This is the mathematical "fingerprint" of that face
+       → Same person = similar numbers; different person = very different numbers
+       Example: [0.21, -0.43, 0.88, 0.09, -0.67, ... ] (512 numbers)
+
+    e. COMPARISON:
+       → For each known person (Ayush has 3 stored embeddings, Rahul has 2):
+           - Calculate Euclidean distance between new embedding and each stored one
+           - Euclidean distance = sqrt( sum of (a-b)^2 for each of the 512 numbers )
+           - Average all distances for that person
+       → Pick the person with the SMALLEST average distance
+       → If smallest distance < 0.6 → that person is recognized
+       → If smallest distance >= 0.6 → return "Unknown"
+
+       EXAMPLE calculation:
+         New face embedding: [0.21, -0.43, 0.88, ...]
+         Ayush embedding 1:  [0.19, -0.41, 0.90, ...]  → distance = 0.15
+         Ayush embedding 2:  [0.23, -0.45, 0.85, ...]  → distance = 0.12
+         Ayush embedding 3:  [0.20, -0.44, 0.87, ...]  → distance = 0.08
+         Average for Ayush = (0.15 + 0.12 + 0.08) / 3 = 0.117
+
+         Rahul embedding 1:  [0.71, 0.22, -0.33, ...]  → distance = 1.23
+         Rahul embedding 2:  [0.69, 0.25, -0.31, ...]  → distance = 1.19
+         Average for Rahul = (1.23 + 1.19) / 2 = 1.21
+
+         Best match: Ayush with distance 0.117
+         0.117 < 0.6 threshold → RECOGNIZED as Ayush
+         Confidence = e^(-0.117) = 0.89 = 89%
+
+  Step 5: app.py builds the response
+    → Looks up Ayush's custom message in custom_messages.json
+    → Appends message to result
+    → Saves recognition event to face_log.json with timestamp
+    → Returns JSON: {
+        "name": "Ayush",
+        "confidence": 0.89,
+        "box": [120, 45, 180, 200],
+        "detected": true,
+        "message": "Welcome Ayush! Great to see you!"
+      }
+
+  Step 6: Browser receives the result
+    → Camera.js draws a green box at [120, 45, 180, 200] on the canvas overlay
+    → Corner bracket decorations added (sci-fi look)
+    → Name label "Ayush 89%" drawn above the box
+    → onResult callback fires → App.js receives the result
+
+  Step 7: App.js processes the result
+    → Updates currentResult state → MessageBanner shows below camera
+    → Broadcasts to Display Window via BroadcastChannel
+    → Checks cooldown: if "Ayush" wasn't announced in the last 10 seconds:
+        → SpeechSynthesisUtterance("Welcome Ayush! Great to see you!") spoken aloud
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5 — BACKEND DEPENDENCIES (PYTHON) — EVERY PACKAGE EXPLAINED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  Package          Version    What it does                                   │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  flask            3.1.3      Web server framework                           │
+  │  flask-cors       6.0.2      Allows browser to talk to the server           │
+  │  numpy            2.4.4      Math library for arrays/matrices               │
+  │  opencv-python    4.13.0     Image reading, writing, processing             │
+  │  mtcnn            1.0.0      Face detection neural network                  │
+  │  tensorflow       2.21.0     AI/ML framework that runs neural networks      │
+  │  keras-facenet    0.3.2      Pre-trained FaceNet model for face embeddings  │
+  │  Pillow           12.1.1     Image format support (PNG, JPEG, BMP, etc.)    │
+  │  scikit-learn     1.8.0      Machine learning toolkit (used for math utils) │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ── FLASK (version 3.1.3) ─────────────────────────────────────────────────────────
+
+  What it is:
+    Flask is a Python web framework. It turns a Python script into a web server
+    that can receive HTTP requests (like form submissions or API calls) and
+    send back responses (like JSON data).
+
+  Why we need it:
+    The browser (JavaScript) cannot directly call Python functions.
+    Flask creates a bridge: it listens on port 5000 for HTTP requests,
+    runs the appropriate Python code, and sends back a response.
+
+  How it's used in this project:
+    In app.py, every @app.route() decorator defines a URL the browser can call:
+
+    @app.route("/recognize", methods=["POST"])
+    def recognize():
+        # This runs when browser sends POST to http://localhost:5000/recognize
+        frame = decode_base64_image(request.get_json()["image"])
+        result = engine.recognize(frame)
+        return jsonify(result)   # Sends JSON back to browser
+
+  Sub-packages Flask installs automatically:
+    - Werkzeug: Handles the low-level HTTP request/response mechanics
+    - Jinja2: HTML template engine (not used much here, but Flask requires it)
+    - Click: Creates the "flask run" command-line tool
+    - MarkupSafe: Prevents security issues in HTML output
+    - Itsdangerous: Handles secure cookie signing
+    - Blinker: Signal/event system Flask uses internally
+
+  ── FLASK-CORS (version 6.0.2) ────────────────────────────────────────────────────
+
+  What it is:
+    CORS = Cross-Origin Resource Sharing.
+    A browser security rule that BLOCKS JavaScript from calling servers
+    on different ports/domains than the page itself.
+
+  The problem without it:
+    Browser is at:   http://localhost:3000  (React frontend)
+    Backend is at:   http://localhost:5000  (Flask backend)
+    These are DIFFERENT origins (different ports).
+    Without CORS enabled, the browser refuses to send the request.
+    Error: "Access to XMLHttpRequest blocked by CORS policy"
+
+  How flask-cors fixes it:
+    CORS(app) in app.py tells Flask to add special HTTP headers to every response:
+    "Access-Control-Allow-Origin: *"
+    This tells the browser: "It's okay, I'm allowing requests from anywhere."
+
+  Example:
+    Without flask-cors: Browser says "I won't send to port 5000, different origin!"
+    With flask-cors:    Browser says "Server said it's okay, proceeding."
+
+  ── NUMPY (version 2.4.4) ─────────────────────────────────────────────────────────
+
+  What it is:
+    NumPy is Python's numerical computing library. It provides the "ndarray"
+    (N-dimensional array) — a super-fast container for numbers.
+    Almost every AI/image library in Python uses NumPy arrays.
+
+  Why we need it:
+    Images are just grids of numbers. A 640×480 color image is actually
+    an array of shape (480, 640, 3) — 480 rows, 640 columns, 3 color channels (RGB).
+    NumPy makes it possible to do math on these arrays very fast.
+
+  How it's used in this project:
+    - OpenCV reads images as NumPy arrays
+    - MTCNN takes NumPy arrays as input
+    - FaceNet returns embeddings as NumPy arrays
+    - Euclidean distance calculation: np.linalg.norm(emb1 - emb2)
+    - Array operations: np.mean(distances), np.exp(-distance)
+
+  Example:
+    A tiny 2×2 grayscale image:
+    [[120, 200],    ← row 0: pixel at (0,0)=120, pixel at (0,1)=200
+     [ 50, 180]]   ← row 1: pixel at (1,0)=50,  pixel at (1,1)=180
+
+    A color image pixel [255, 128, 0] means R=255 (full red), G=128, B=0.
+
+  ── OPENCV-PYTHON (version 4.13.0) ────────────────────────────────────────────────
+
+  What it is:
+    OpenCV (Open Computer Vision) is the industry-standard library for
+    image and video processing. It can read/write images, convert color
+    spaces, draw shapes, resize images, and much more.
+
+  Why we need it:
+    We need to:
+    - Read image files from disk (cv2.imread)
+    - Decode base64 images sent from the browser
+    - Convert BGR to RGB (OpenCV uses BGR order, most AI models use RGB)
+    - Draw bounding boxes (though we do this in the browser here)
+    - Resize face crops to 160×160
+
+  BGR vs RGB explanation:
+    Most cameras and OpenCV use BGR order (Blue, Green, Red).
+    But MTCNN and FaceNet expect RGB order (Red, Green, Blue).
+    If you forget to convert, colors are swapped and recognition fails.
+    We do: rgb_image = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
+
+  How it's used in this project:
+    recognition.py:
+      image = cv2.imread("dataset/Ayush/img1.jpg")    # reads as BGR numpy array
+      rgb   = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # convert to RGB for MTCNN
+      face  = rgb[y:y+h, x:x+w]                       # crop face region
+      face  = cv2.resize(face, (160, 160))             # resize to FaceNet input size
+
+    utils.py:
+      np_array = np.frombuffer(image_bytes, np.uint8)  # raw bytes → numpy
+      image    = cv2.imdecode(np_array, cv2.IMREAD_COLOR)  # decode JPEG/PNG
+
+  ── MTCNN (version 1.0.0) ─────────────────────────────────────────────────────────
+
+  What it is:
+    MTCNN = Multi-task Cascaded Convolutional Networks.
+    A deep learning model specifically designed to DETECT faces in images.
+    It's called "cascaded" because it uses 3 neural networks in sequence,
+    each one more detailed than the last (P-Net → R-Net → O-Net).
+
+  What it does:
+    Given an image, MTCNN returns a list of all faces found, each with:
+    - box: [x, y, width, height] — where the face is
+    - confidence: 0.0 to 1.0 — how sure it is this is a face
+    - keypoints: positions of eyes, nose, mouth corners
+
+  Why MTCNN instead of simpler methods?
+    Older method: Haar Cascade (cv2.CascadeClassifier)
+      - Fast but inaccurate, many false positives
+      - Fails with tilted heads, different lighting
+      - Based on handcrafted rules from 2001
+
+    MTCNN (used here):
+      - Neural network learned from millions of face images
+      - Works at multiple scales (tiny and large faces)
+      - Handles angles, lighting variations, partial faces
+      - Provides facial landmarks (eye/nose positions)
+
+  How it's used in this project:
+    detector = MTCNN()              # loads 3 neural networks into RAM
+    results = detector.detect_faces(rgb_image)
+    # results = [
+    #   {
+    #     "box": [120, 45, 180, 200],      # face at x=120, y=45, w=180, h=200
+    #     "confidence": 0.9998,
+    #     "keypoints": {
+    #       "left_eye": (175, 130),
+    #       "right_eye": (280, 132),
+    #       "nose": (230, 175),
+    #       "mouth_left": (180, 220),
+    #       "mouth_right": (275, 218)
+    #     }
+    #   }
+    # ]
+
+  Dependency: MTCNN requires TensorFlow to run its neural networks.
+
+  ── TENSORFLOW (version 2.21.0) ───────────────────────────────────────────────────
+
+  What it is:
+    TensorFlow is Google's open-source machine learning framework.
+    It's the engine that actually RUNS neural network computations.
+    Think of it as a calculator that can do billions of math operations per second
+    on matrices (grids of numbers).
+
+  Why we need it:
+    Both MTCNN and FaceNet are neural networks — mathematical functions with
+    millions of parameters (learned weights). TensorFlow:
+    - Loads these pre-trained weights from files
+    - Efficiently runs the forward-pass computation (input → output)
+    - Manages memory and uses GPU if available
+
+  What "pre-trained" means:
+    We did NOT train FaceNet ourselves. Someone else trained it on millions of face
+    images over days/weeks on powerful GPU servers. They saved the learned weights.
+    We just LOAD those weights and use them for inference (making predictions).
+    This is called "transfer learning" or "using a pre-trained model."
+
+  TensorFlow's sub-packages (installed automatically):
+    - keras 3.13.2:      High-level API that makes building/using models easier
+    - absl-py:           Google's Python utilities
+    - protobuf:          Binary format for saving/loading TF model files
+    - grpcio:            Remote procedure calls (for TF serving)
+    - h5py:              Reads HDF5 format model files (.h5)
+    - flatbuffers:       Efficient binary serialization
+    - ml-dtypes:         Numeric data types for ML (bfloat16, etc.)
+    - opt-einsum:        Optimizes Einstein summation (matrix math)
+    - astunparse:        Python AST (code structure) parsing for TF graph building
+    - libclang:          C++ code parsing (TF has C++ backend)
+    - gast:              Python syntax tree transformations
+    - google-pasta:      Python code manipulation tool
+
+  ── KERAS-FACENET (version 0.3.2) ─────────────────────────────────────────────────
+
+  What it is:
+    A Python package that wraps the pre-trained FaceNet model.
+    FaceNet was created by Google researchers in 2015.
+    This package downloads the model weights automatically on first use (~90MB)
+    and provides a simple API to use it.
+
+  What FaceNet does:
+    FaceNet is a neural network that takes a 160×160 face image and outputs
+    a 512-dimensional embedding vector. The key property:
+    - Same person, different photos → embeddings are CLOSE to each other
+    - Different people → embeddings are FAR from each other
+
+    This is called a "metric learning" approach — the model learns to map
+    faces into a space where similar faces cluster together.
+
+  The FaceNet architecture:
+    Input: 160×160×3 image (160px wide, 160px tall, 3 color channels)
+    → Inception-ResNet-v1 neural network (dozens of layers)
+    → L2 normalization
+    Output: 512 float32 numbers (the embedding)
+
+  How it's used in this project:
+    facenet = FaceNet()                          # loads model (~90MB)
+    batch   = np.expand_dims(face_160x160, 0)   # shape: (1, 160, 160, 3)
+    embs    = facenet.embeddings(batch)          # shape: (1, 512)
+    emb     = embs[0]                            # shape: (512,) — the fingerprint
+
+  Why 512 dimensions?
+    Each number captures a different feature of the face.
+    Some might encode "distance between eyes", "shape of jaw", "nose width", etc.
+    (We don't know exactly — the model learned these features automatically.)
+    512 numbers gives enough detail to distinguish millions of different people.
+
+  ── PILLOW (version 12.1.1) ───────────────────────────────────────────────────────
+
+  What it is:
+    Python Imaging Library (PIL) fork. Supports reading/writing virtually
+    every image format: JPEG, PNG, BMP, GIF, TIFF, WebP, etc.
+
+  Why we need it:
+    OpenCV uses Pillow internally for some image format conversions.
+    Also used by keras-facenet when loading model assets.
+    Without it, some image file formats might fail to open.
+
+  ── SCIKIT-LEARN (version 1.8.0) ──────────────────────────────────────────────────
+
+  What it is:
+    The most popular machine learning toolkit for Python.
+    Includes hundreds of algorithms for classification, clustering, preprocessing.
+
+  Why we need it here:
+    We include it as a utility dependency. scipy (which scikit-learn depends on)
+    provides optimized mathematical functions used by other packages.
+    In the future, could be used for more advanced clustering or classification.
+
+  Sub-packages:
+    - scipy 1.17.1:         Scientific computing (stats, signal processing, linear algebra)
+    - joblib 1.5.3:         Parallel computing, caching
+    - threadpoolctl 3.6.0:  Thread pool management for parallel operations
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 6 — FRONTEND DEPENDENCIES (JAVASCRIPT) — EVERY PACKAGE EXPLAINED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │  Package          Version    What it does                                   │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │  react            18.2.0     UI component library                           │
+  │  react-dom        18.2.0     Renders React components to the browser DOM    │
+  │  react-scripts    5.0.1      Build tools (webpack, babel, dev server)       │
+  │  axios            1.6.2      HTTP client for making API requests            │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  Also used (built into browsers, no installation needed):
+    - getUserMedia API    — Access camera/microphone
+    - Canvas API         — Draw graphics on screen
+    - BroadcastChannel   — Communication between browser windows
+    - SpeechSynthesis    — Text-to-speech voice output
+    - BroadcastChannel   — Cross-window messaging
+
+  ── REACT (version 18.2.0) ────────────────────────────────────────────────────────
+
+  What it is:
+    React is Facebook's JavaScript library for building user interfaces.
+    Instead of directly manipulating the HTML (which is slow and messy),
+    React uses a "virtual DOM" — it maintains a copy of the page structure
+    in memory and only updates the parts that actually changed.
+
+  Core concepts used in this project:
+
+    1. COMPONENTS:
+       Every UI piece is a function that returns HTML-like code (JSX).
+       Example:
+         function MessageBanner({ result }) {
+           return (
+             <div className="banner">
+               <h1>{result.name}</h1>
+               <p>{result.message}</p>
+             </div>
+           );
+         }
+       This is like a custom HTML element you can reuse.
+
+    2. STATE (useState):
+       State is data that, when changed, causes the component to re-render.
+       Example:
+         const [isRunning, setIsRunning] = useState(false);
+         // isRunning starts as false
+         // When setIsRunning(true) is called, component re-renders
+         // and the button text changes from "Start" to "Stop"
+
+    3. EFFECTS (useEffect):
+       Runs code when the component mounts or when certain values change.
+       Example:
+         useEffect(() => {
+           fetchPersons();  // run this when component first appears
+         }, []);            // empty [] means "only run once on mount"
+
+    4. REFS (useRef):
+       Holds a reference to a DOM element or a persistent value.
+       Example:
+         const videoRef = useRef(null);
+         // videoRef.current points to the actual <video> HTML element
+         // Used to call .srcObject = stream on it
+
+    5. CALLBACKS (useCallback):
+       Memoizes a function so it doesn't get recreated on every render.
+       Prevents unnecessary re-renders of child components.
+
+  ── REACT-DOM (version 18.2.0) ────────────────────────────────────────────────────
+
+  What it is:
+    The package that connects React to the browser's actual DOM (Document Object Model).
+    React itself is platform-agnostic (works on web, mobile, desktop).
+    react-dom is the web-specific renderer.
+
+  How it's used:
+    In index.js:
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    This mounts the entire React app into the <div id="root"> in index.html.
+
+  ── REACT-SCRIPTS (version 5.0.1) ─────────────────────────────────────────────────
+
+  What it is:
+    Create React App's build toolchain. When you run "npm start", react-scripts:
+    - Starts a development web server (port 3000)
+    - Watches your files for changes and auto-reloads the browser
+    - Transpiles modern JavaScript (JSX, ES2022) to browser-compatible JS via Babel
+    - Bundles all files together via Webpack
+    - Provides hot module replacement (changes appear without full page reload)
+
+  Sub-tools included:
+    - Webpack 5:   Module bundler — combines hundreds of JS files into one
+    - Babel:       JavaScript compiler — converts modern JS to older compatible JS
+    - ESLint:      Code linter — warns about bad code patterns
+    - Jest:        Test runner (for "npm test")
+    - PostCSS:     CSS processing (autoprefixer adds browser prefixes)
+
+  ── AXIOS (version 1.6.2) ─────────────────────────────────────────────────────────
+
+  What it is:
+    A JavaScript HTTP client library. Makes it easy to send HTTP requests
+    (GET, POST, DELETE, etc.) to servers and handle responses.
+
+  Why not use fetch() (built-in browser API)?
+    Axios provides: automatic JSON parsing, request/response interceptors,
+    timeout support, better error messages, and request cancellation.
+
+  How it's used in this project:
+    // Send image for recognition:
+    const { data } = await axios.post('http://localhost:5000/recognize', {
+      image: base64ImageString
+    }, { timeout: 12000 });
+    // data = { name: "Ayush", confidence: 0.89, box: [120, 45, 180, 200] }
+
+    // Get list of persons:
+    const { data } = await axios.get('http://localhost:5000/persons');
+    // data = { persons: [{ name: "Ayush", images_count: 3, ... }] }
+
+    // Add a person (file upload):
+    const formData = new FormData();
+    formData.append('name', 'Ayush');
+    formData.append('images', file1);
+    formData.append('images', file2);
+    await axios.post('http://localhost:5000/add-person', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+
+  ── BROWSER APIS (No Installation Needed) ─────────────────────────────────────────
+
+  getUserMedia API:
+    Gives JavaScript access to the camera and microphone.
+    navigator.mediaDevices.getUserMedia({ video: true })
+    → Returns a MediaStream object
+    → That stream is assigned to a <video> element's srcObject
+    → Video plays live in the browser
+
+  Canvas API:
+    HTML Canvas is a 2D drawing surface. Used for:
+    1. Capturing video frames: canvas.getContext('2d').drawImage(video, 0, 0)
+    2. Converting to base64: canvas.toDataURL('image/jpeg', 0.7)
+    3. Drawing bounding boxes and labels over the video
+
+  BroadcastChannel API:
+    Lets different browser windows/tabs on the same origin communicate.
+    No server needed — it's direct in-memory messaging.
+
+    Main window (App.js):
+      const channel = new BroadcastChannel('face-recognition-display');
+      channel.postMessage({ type: 'result', payload: { name: 'Ayush', ... } });
+
+    Display window (DisplayWindow.js):
+      const channel = new BroadcastChannel('face-recognition-display');
+      channel.onmessage = (event) => {
+        if (event.data.type === 'result') setResult(event.data.payload);
+      };
+
+  SpeechSynthesis API:
+    Browser's built-in text-to-speech engine.
+    Uses your OS's installed voices.
+    const speech = new SpeechSynthesisUtterance("Welcome Ayush!");
+    speech.rate = 0.95;   // speaking speed
+    speech.pitch = 1.0;   // voice pitch
+    window.speechSynthesis.speak(speech);
+
+  DeviceChange Event:
+    navigator.mediaDevices.addEventListener('devicechange', callback)
+    Fires automatically when a USB camera is plugged in or unplugged.
+    Used to refresh the camera list without page reload.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7 — HOW ALL DEPENDENCIES ARE CONNECTED TO EACH OTHER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  This diagram shows which packages depend on other packages:
+
+  BACKEND DEPENDENCY TREE:
+  ─────────────────────────
+  app.py (our code)
+    ├── flask ──────────────────→ werkzeug, jinja2, click, markupsafe, itsdangerous, blinker
+    ├── flask-cors ─────────────→ flask
+    ├── recognition.py (our code)
+    │   ├── mtcnn ──────────────→ tensorflow (needs TF to run neural network)
+    │   │                      → numpy (images as arrays)
+    │   │                      → lz4 (compression for model data)
+    │   │                      → joblib (caching, parallelism)
+    │   ├── keras-facenet ──────→ tensorflow (runs FaceNet model)
+    │   │                      → numpy (embedding arrays)
+    │   │                      → Pillow (image format support)
+    │   ├── tensorflow ─────────→ keras (high-level model API)
+    │   │                      → numpy (ALL tensor operations)
+    │   │                      → protobuf (model file format)
+    │   │                      → grpcio (remote procedure calls)
+    │   │                      → h5py (HDF5 model files)
+    │   │                      → flatbuffers (TFLite format)
+    │   │                      → ml-dtypes (data types)
+    │   │                      → absl-py (app utilities)
+    │   │                      → six (Python 2/3 compat)
+    │   │                      → wrapt (decorators)
+    │   │                      → gast, astunparse (code analysis)
+    │   │                      → libclang (C++ interface)
+    │   │                      → opt-einsum (matrix optimization)
+    │   │                      → termcolor (colored output)
+    │   │                      → google-pasta (code tools)
+    │   │                      → packaging (version parsing)
+    │   │                      → requests (downloading models)
+    │   │                         ├── urllib3
+    │   │                         ├── certifi (SSL certificates)
+    │   │                         ├── charset-normalizer
+    │   │                         └── idna
+    │   ├── opencv-python ──────→ numpy (images AS numpy arrays)
+    │   │                      → (internally: libjpeg, libpng, ffmpeg)
+    │   └── numpy ──────────────→ (no Python deps — uses compiled C code)
+    └── utils.py (our code)
+        ├── numpy
+        └── opencv-python
+
+  HOW THE CHAIN WORKS IN PRACTICE:
+  ──────────────────────────────────
+  When a recognition request arrives:
+
+  1. Flask receives HTTP POST request
+      ↓ uses
+  2. utils.py decodes base64 → calls numpy + opencv
+      ↓ passes numpy array to
+  3. recognition.py detect_face() → calls MTCNN
+      ↓ MTCNN calls
+  4. TensorFlow → runs P-Net, R-Net, O-Net neural networks
+      ↓ returns bounding box, recognition.py crops face with
+  5. OpenCV (cv2.resize) + numpy array slicing
+      ↓ passes 160×160 numpy array to
+  6. keras-facenet → calls TensorFlow again → runs FaceNet
+      ↓ TensorFlow returns
+  7. 512-number numpy array (the embedding)
+      ↓ recognition.py uses numpy to
+  8. Calculate Euclidean distance (np.linalg.norm)
+      ↓ picks best match, app.py uses
+  9. flask.jsonify() → sends result back to browser
+
+  FRONTEND DEPENDENCY TREE:
+  ──────────────────────────
+  index.js (entry point)
+    └── react-dom.createRoot() ─→ react (component system)
+          └── <App /> (our component)
+                ├── axios ──────→ sends HTTP to Flask backend
+                ├── Camera.js ──→ getUserMedia API (browser built-in)
+                │                → Canvas API (browser built-in)
+                │                → axios
+                ├── App.js ─────→ BroadcastChannel API (browser built-in)
+                │                → SpeechSynthesis API (browser built-in)
+                │                → axios
+                └── DisplayWindow.js → BroadcastChannel API
+
+  All compiled/bundled by react-scripts (webpack + babel)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 8 — THE FACE RECOGNITION PIPELINE (DEEP DIVE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Stage 1: IMAGE CAPTURE (browser)
+  ─────────────────────────────────
+  What happens: JavaScript grabs the current video frame using HTML Canvas.
+
+    const video = document.querySelector('video');
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;    // e.g. 1280
+    canvas.height = video.videoHeight;  // e.g. 720
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const base64 = canvas.toDataURL('image/jpeg', 0.7);
+    // base64 = "/9j/4AAQSkZJRgAB..." (a very long string of characters)
+
+  The number 0.7 is JPEG quality (70%). Lower = smaller file, faster transfer.
+  The image is sent to the backend inside a JSON object:
+    { "image": "/9j/4AAQSkZJRgAB..." }
+
+  Stage 2: IMAGE DECODING (backend)
+  ────────────────────────────────────
+  What happens: Python converts the base64 string back to an image array.
+
+    # "base64" means encoding binary data as text characters (A-Z, a-z, 0-9, +, /)
+    image_bytes = base64.b64decode(base64_string)
+    # image_bytes is now raw binary JPEG data
+
+    np_array = np.frombuffer(image_bytes, dtype=np.uint8)
+    # np_array is now a 1D array of byte values [255, 216, 255, 224, ...]
+
+    frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
+    # frame is now a (720, 1280, 3) numpy array — the actual pixel values
+    # frame[0, 0] = [120, 200, 180] — first pixel's Blue, Green, Red values
+
+  Stage 3: FACE DETECTION with MTCNN
+  ─────────────────────────────────────
+  What happens: MTCNN scans the image at multiple scales.
+
+  MTCNN's 3-stage pipeline:
+    P-Net (Proposal Network):
+      - Slides a 12×12 window across the image
+      - Quickly filters out obvious non-face regions
+      - Very fast, produces many candidate regions
+
+    R-Net (Refine Network):
+      - Takes candidates from P-Net
+      - Uses a larger 24×24 window
+      - Rejects more false positives
+      - Fewer but better candidates
+
+    O-Net (Output Network):
+      - Final, most accurate network
+      - 48×48 input
+      - Produces final face boxes + confidence + landmark positions
+      - Returns: box, confidence score, eye/nose/mouth positions
+
+  After MTCNN returns results:
+    result = max(results, key=lambda r: r['confidence'])
+    # Pick the face with highest confidence (if multiple faces present)
+
+    x, y, w, h = result['box']
+    x, y = max(0, x), max(0, y)  # negative coords can happen at image edges
+
+  Stage 4: FACE ALIGNMENT & PREPROCESSING
+  ─────────────────────────────────────────
+  What happens: The face region is extracted and standardized.
+
+    padding = 10  # pixels of padding around face
+    x1, y1 = max(0, x - padding), max(0, y - padding)
+    x2, y2 = min(img_width, x + w + padding), min(img_height, y + h + padding)
+
+    face_rgb = rgb_image[y1:y2, x1:x2]    # crop face from image
+    face_resized = cv2.resize(face_rgb, (160, 160))  # resize to FaceNet input
+    face_float = face_resized.astype(np.float32)     # convert to float
+
+  Why 160×160? FaceNet's architecture requires exactly 160×160 input.
+  Why float32? Neural networks work with floating point numbers, not integers.
+
+  Stage 5: EMBEDDING GENERATION with FaceNet
+  ────────────────────────────────────────────
+  What happens: FaceNet converts the 160×160 face into a 512-number vector.
+
+    batch = np.expand_dims(face_float, axis=0)  # shape: (1, 160, 160, 3)
+    # FaceNet needs a batch dimension even for single images
+
+    embeddings = facenet.embeddings(batch)  # shape: (1, 512)
+    embedding = embeddings[0]               # shape: (512,)
+
+  What makes embeddings powerful:
+    FaceNet was trained with "Triplet Loss":
+      - Anchor: photo of Ayush
+      - Positive: another photo of Ayush  → embeddings should be CLOSE
+      - Negative: photo of Rahul          → embeddings should be FAR
+
+    After training on millions of faces, FaceNet learned to map:
+      - Ayush's face (any photo) → region A of the 512D space
+      - Rahul's face (any photo) → region B of the 512D space (far from A)
+
+  Stage 6: IDENTITY MATCHING
+  ─────────────────────────────
+  What happens: Compare new embedding against all stored embeddings.
+
+    For each person in the database:
+      distances = []
+      for stored_emb in known_embeddings[person_name]:
+          dist = np.linalg.norm(new_emb - stored_emb)
+          # = sqrt((a1-b1)² + (a2-b2)² + ... + (a512-b512)²)
+          distances.append(dist)
+
+      avg_distance = np.mean(distances)
+      # Why average? Because some stored photos might be in different poses.
+      # Averaging is more robust than using min or max.
+
+    best_match = person with smallest avg_distance
+    if best_distance < 0.6:
+        recognized = best_match
+    else:
+        recognized = "Unknown"
+
+  Why threshold 0.6?
+    - Distance 0.0 = identical faces (same photo)
+    - Distance 0.2-0.4 = same person, different photos
+    - Distance 0.5-0.7 = borderline (different lighting, big age gap)
+    - Distance 0.8+ = definitely different people
+    - 0.6 was found empirically to work well on LFW benchmark dataset
+
+  Confidence calculation:
+    confidence = e^(-distance)
+    # distance 0.1 → confidence 0.90 (90%)
+    # distance 0.3 → confidence 0.74 (74%)
+    # distance 0.6 → confidence 0.55 (55%) ← at threshold
+    # distance 1.0 → confidence 0.37 (37%)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 9 — BACKEND API ENDPOINTS — EVERY ROUTE EXPLAINED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  All endpoints are on: http://localhost:5000
+
+  GET /health
+  ───────────
+  Purpose: Check if the server is running.
+  Called by: App.js on startup to show "API online" indicator.
+  Request: None
+  Response: {"status": "ok", "message": "Face Recognition API is running", "persons": 2}
+  Example:
+    curl http://localhost:5000/health
+
+  POST /recognize
+  ───────────────
+  Purpose: Recognize a face in an image.
+  Called by: Camera.js every 1.5 seconds.
+  Request body: {"image": "<base64 jpeg string>"}
+  Response:
+    Face found and recognized:
+      {"detected": true, "name": "Ayush", "confidence": 0.89,
+       "box": [120, 45, 180, 200], "message": "Welcome Ayush!"}
+    Face found but unknown:
+      {"detected": true, "name": "Unknown", "confidence": 0.37,
+       "box": [120, 45, 180, 200], "message": "Unknown person detected"}
+    No face in image:
+      {"detected": false, "name": "No face detected", "confidence": 0.0, "box": null}
+
+  GET /persons
+  ─────────────
+  Purpose: List all registered persons.
+  Called by: App.js on startup and after adding/deleting persons.
+  Response: {"persons": [
+    {"name": "Ayush", "images_count": 3, "embeddings_count": 3},
+    {"name": "Rahul", "images_count": 2, "embeddings_count": 2}
+  ]}
+
+  POST /add-person
+  ────────────────
+  Purpose: Register a new person.
+  Called by: AddPerson.js on form submit.
+  Request: multipart/form-data with fields:
+    - name: "Ayush" (text)
+    - images: file1.jpg (file, can send multiple)
+    - images: file2.jpg (file)
+  What it does:
+    1. Saves images to dataset/Ayush/img1.jpg, img2.jpg
+    2. Runs MTCNN + FaceNet on each image
+    3. Stores embeddings in memory and embeddings.pkl
+    4. Adds default message to custom_messages.json
+  Response: {"message": "Successfully registered 'Ayush' with 2 images.", "name": "Ayush"}
+
+  DELETE /delete-person/<name>
+  ────────────────────────────
+  Purpose: Remove a person completely.
+  Called by: PersonsTab when user clicks the delete button.
+  Example URL: DELETE http://localhost:5000/delete-person/Ayush
+  What it does:
+    1. Removes Ayush's embeddings from memory
+    2. Updates embeddings.pkl
+    3. Deletes dataset/Ayush/ folder and all photos
+    4. Removes Ayush's custom message
+  Response: {"message": "Successfully deleted 'Ayush'."}
+
+  GET /custom-messages
+  ─────────────────────
+  Purpose: Fetch all custom greeting messages.
+  Called by: App.js on startup.
+  Response: {"Ayush": "Welcome Ayush!", "Rahul": "Good morning Rahul!"}
+
+  POST /custom-messages
+  ─────────────────────
+  Purpose: Save updated custom messages.
+  Called by: MessagesTab when user clicks "Save Changes".
+  Request body: {"Ayush": "Hello Ayush!", "Rahul": "Hi Rahul, welcome back!"}
+  Response: {"message": "Custom messages saved."}
+
+  GET /face-log
+  ─────────────
+  Purpose: Get recognition history.
+  Called by: FaceLog.js on mount and every 10 seconds.
+  Response: [
+    {"name": "Ayush", "confidence": 0.89, "timestamp": "2026-03-29T14:32:11.456"},
+    {"name": "Rahul", "confidence": 0.76, "timestamp": "2026-03-29T14:31:05.123"}
+  ]
+  (Returns last 100 events, most recent first)
+
+  POST /rebuild-embeddings
+  ─────────────────────────
+  Purpose: Rebuild all embeddings from the dataset folder.
+  Called by: "⟳ Rebuild All" button in Persons tab.
+  Use when: You manually added photos to the dataset/ folder.
+  What it does: Scans all subfolders in dataset/, runs MTCNN+FaceNet on all images.
+  Response: {"message": "Rebuilt embeddings for 2 persons.", "count": 2}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 10 — FRONTEND COMPONENTS — EVERY FILE EXPLAINED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  App.js — Root Component
+  ─────────────────────────
+  Location: frontend/src/App.js
+
+  Checks if URL contains ?mode=display:
+    - YES → renders <DisplayWindow /> (second monitor mode)
+    - NO  → renders the full <MainApp />
+
+  MainApp renders:
+    - Header with tab navigation + API status + Pop Out button
+    - One of four tabs: Camera | Persons | Log | Messages
+    - AddPerson modal when "Add Person" is clicked
+
+  Key state variables:
+    isRunning:     boolean — is the camera recognition loop active?
+    currentResult: object  — latest recognition result from backend
+    knownPersons:  array   — list of registered people (from GET /persons)
+    customMessages: object — greeting messages (from GET /custom-messages)
+    apiStatus:     string  — "online" | "offline" | "checking"
+    displayOpen:   boolean — is the second screen window open?
+
+  BroadcastChannel:
+    Created once with: new BroadcastChannel('face-recognition-display')
+    Every time a face is recognized, broadcasts the result to the display window.
+
+  Speech cooldown logic:
+    lastSpokenRef stores { name: "Ayush", time: 1711720331000 }
+    Before speaking, checks: is it the same person AND < 10 seconds ago?
+    If yes → skip speech. Prevents repeating "Welcome Ayush!" every 1.5 seconds.
+
+  ── Camera.js ─────────────────────────────────────────────────────────────────────
+  Location: frontend/src/components/Camera.js
+
+  Three HTML elements it creates:
+    <video>   — Shows the live camera feed (NOT recorded, just displayed)
+    <canvas>  — Invisible canvas used to "screenshot" the video frame
+    <canvas>  — Visible overlay canvas for drawing bounding boxes
+
+  Camera enumeration:
+    - Calls enumerateDevices() to get all connected cameras
+    - Triggers a brief getUserMedia first (needed for Chrome to show device labels)
+    - Listens to devicechange event (fires when USB camera is plugged in)
+    - Calls fetchCameras() again when event fires → list updates instantly
+
+  Frame capture loop:
+    setInterval(sendFrame, 1500)  ← runs every 1500ms = 1.5 seconds
+
+    sendFrame():
+      1. Draws current video frame to hidden canvas
+      2. Calls canvas.toDataURL('image/jpeg', 0.7) → base64 string
+      3. POSTs to /recognize
+      4. Gets result → calls drawBox() + onResult()
+
+  Bounding box drawing:
+    Uses Canvas 2D API:
+    - ctx.strokeRect(x, y, w, h) — draws the main rectangle
+    - Corner bracket lines drawn separately for sci-fi look
+    - ctx.fillText(label, x, y) — draws name label above box
+    - Colors: green (#00e676) for known, red (#ff1744) for unknown
+
+  Overlay canvas positioning:
+    Both the <video> and overlay <canvas> are absolutely positioned in the same
+    container. CSS: position: absolute; inset: 0; width: 100%; height: 100%;
+    The canvas internal size (canvas.width, canvas.height) matches the video's
+    natural resolution. CSS scales both identically so coordinates align perfectly.
+
+  ── MessageBanner.js ──────────────────────────────────────────────────────────────
+  Location: frontend/src/components/MessageBanner.js
+
+  Simple display component. Receives the result object as a prop.
+  Shows:
+    - ✅ icon (green) or ❓ icon (red)
+    - Person's name in large text
+    - Custom greeting message
+    - Confidence percentage with block characters: ████████░░ 82%
+
+  Animates in with CSS: animation: slideUp 0.3s ease;
+
+  ── AddPerson.js ──────────────────────────────────────────────────────────────────
+  Location: frontend/src/components/AddPerson.js
+
+  A modal dialog (full-screen overlay with centered box).
+  Two ways to add photos:
+
+  Method 1: File Upload
+    - Hidden <input type="file" multiple accept="image/*" />
+    - User clicks "Upload Photos" → opens file picker
+    - Selected files stored as File objects in state
+    - Object URLs created for preview thumbnails: URL.createObjectURL(file)
+
+  Method 2: Live Camera Capture
+    - Starts a separate camera stream (another getUserMedia call)
+    - Shows live video preview
+    - "Capture" button: draws frame to canvas, converts to Blob, creates File
+    - Multiple captures create multiple File objects
+
+  On submit:
+    - Creates FormData object
+    - Appends name and all image files
+    - Sends as multipart/form-data POST to /add-person
+    - Timeout is 120 seconds (face processing takes time)
+    - Shows success message, auto-closes after 1.8 seconds
+
+  Auto-fills custom message:
+    When user types a name, the message field auto-fills: "Welcome [name]!"
+    User can customize before registering.
+
+  ── FaceLog.js ────────────────────────────────────────────────────────────────────
+  Location: frontend/src/components/FaceLog.js
+
+  Fetches and displays the recognition history from GET /face-log.
+  Auto-refreshes every 10 seconds with setInterval.
+  Shows: entry number, name with ✅/❓ icon, confidence bar, timestamp.
+
+  The confidence bar is a CSS width trick:
+    <div style={{ width: `${pct}%` }} className="confidence-bar" />
+    pct = 82 → div is 82% wide → looks like a progress bar.
+
+  ── DisplayWindow.js ──────────────────────────────────────────────────────────────
+  Location: frontend/src/components/DisplayWindow.js
+  (Covered in depth in Section 11)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 11 — THE SECOND MONITOR / DISPLAY WINDOW FEATURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  CONCEPT:
+  The main window (your control panel) and the display window (what visitors see)
+  are two separate browser windows. They communicate via BroadcastChannel.
+
+  HOW IT OPENS:
+    When you click "🖥 Pop Out Display":
+
+    Method A — Window Management API (Chrome 100+ only):
+      window.getScreenDetails() → asks permission to see all connected screens
+      → finds the screen where isPrimary === false (the second monitor)
+      → opens the window positioned at that screen's coordinates
+      → window appears directly on the second monitor, no dragging needed
+
+    Method B — Fallback for all browsers:
+      window.open('/?mode=display', 'FaceRecognitionDisplay', 'width=1280,height=720')
+      → opens a new browser window, 1280×720 pixels
+      → user drags it to second monitor and presses F11 to fullscreen
+
+  URL-BASED MODE SWITCHING:
+    The display window opens at: http://localhost:3000/?mode=display
+    In App.js:
+      const IS_DISPLAY = new URLSearchParams(window.location.search).get('mode') === 'display';
+      if (IS_DISPLAY) return <DisplayWindow channelName="face-recognition-display" />;
+    This means the same React app handles both modes — no separate server needed.
+
+  BROADCASTCHANNEL COMMUNICATION:
+    Both windows are on http://localhost:3000 (same origin).
+    BroadcastChannel works within the same browser origin.
+
+    Main window broadcasts:
+      { type: 'result', payload: { name, message, confidence, detected, box } }
+      { type: 'clear' }   ← when camera stops or no face detected
+
+    Display window receives:
+      Sets result state → component re-renders → shows recognition card
+
+  DISPLAY WINDOW STATES:
+
+    IDLE STATE (no one detected):
+      - Animated rotating ring (CSS animation: rotate 360deg)
+      - Pulsing eye icon inside the ring
+      - "SCANNING" text with animated dots
+      - Scan line moves vertically across the screen
+      - Live clock in top right
+
+    KNOWN PERSON STATE (e.g. Ayush recognized):
+      - Green glow orb (blurred CSS background)
+      - Large circular avatar with first letter: "A"
+      - "✅ IDENTITY CONFIRMED" badge
+      - Huge name: "AYUSH" (3.5rem font)
+      - Custom message: "Welcome Ayush! Great to see you!"
+      - Confidence bar: ████████░░ 89%
+      - Block characters: ████████░░
+      - Corner bracket decorations (sci-fi frame effect)
+      - Card animates in with scale + translateY (slideUp effect)
+
+    UNKNOWN PERSON STATE:
+      - Red glow orb
+      - Avatar with "?"
+      - "⚠️ UNKNOWN PERSON" badge
+      - Name: "Unknown"
+      - Message: "Unknown person detected"
+
+    AUTO-CLEAR:
+      After 8 seconds with no new result, returns to idle state.
+      clearTimerRef.current = setTimeout(() => { setShow(false); }, 8000)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 12 — THE USB CAMERA SYSTEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  HOW CAMERAS WORK IN BROWSERS:
+    The Web Media API (getUserMedia) treats all cameras the same.
+    Every camera (built-in or USB) is a "video input device" with:
+    - deviceId: unique string identifying this camera
+    - label: human-readable name (e.g. "Logitech C920 (046d:08e5)")
+    - kind: "videoinput"
+
+  ENUMERATING CAMERAS:
+    navigator.mediaDevices.enumerateDevices()
+    Returns all available media devices (cameras, microphones, speakers).
+    IMPORTANT: Chrome requires camera permission before showing device labels.
+    That's why we do a quick getUserMedia first, then immediately stop the stream.
+
+  USB HOT-PLUG DETECTION:
+    navigator.mediaDevices.addEventListener('devicechange', handler)
+    This event fires when:
+    - A USB camera is plugged in
+    - A USB camera is unplugged
+    - A Bluetooth device connects/disconnects
+
+    When fired, we call fetchCameras() again to refresh the list.
+    The ⟳ button is a manual fallback for the same function.
+
+  USB CAMERA IDENTIFICATION:
+    function isUsbCamera(label) {
+      return /usb|external|logitech|webcam|c\d{3}|c\d{4}|..../i.test(label);
+    }
+    Checks for common USB camera brand/model patterns.
+    Adds 🔌 icon to USB cameras in the dropdown vs 📷 for built-in.
+
+  CONSTRAINT FALLBACK:
+    Some USB cameras don't support HD resolution.
+    We first try: { width: { ideal: 1280 }, height: { ideal: 720 } }
+    If that fails with OverconstrainedError:
+      We retry with just: { deviceId: { exact: deviceId } }
+    This handles cheap or older USB cameras.
+
+  CAMERA SWITCHING:
+    Changing the dropdown calls handleCameraChange().
+    If recognition is running, immediately calls startCamera() with new deviceId.
+    Old stream is stopped first: streamRef.current.getTracks().forEach(t => t.stop())
+    New stream starts and is assigned to the same <video> element.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 13 — DATA STORAGE — WHAT GETS SAVED WHERE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  FILE: backend/dataset/<Name>/<photo>.jpg
+  ─────────────────────────────────────────
+  What: The original face photos for each person.
+  Format: JPEG, PNG, BMP, or WebP
+  When written: When user adds a person (via UI or manually)
+  When read: During embedding generation
+
+  FILE: backend/embeddings/embeddings.pkl
+  ─────────────────────────────────────────
+  What: Saved face embeddings (512-number arrays per photo).
+  Format: Python pickle (binary serialization format)
+  Structure: {"Ayush": [array1, array2, array3], "Rahul": [array1, array2]}
+  When written: After adding/deleting a person, or rebuilding embeddings
+  When read: On server startup (loaded into RAM for fast recognition)
+  Size: ~2KB per person (512 float32 numbers × 4 bytes × N photos)
+
+  Why pickle?
+    Pickle serializes Python objects directly — NumPy arrays, dicts, lists.
+    Much faster to load than recalculating embeddings on every startup.
+    Alternatives: JSON (can't store NumPy arrays), HDF5 (overkill for this size).
+
+  FILE: backend/custom_messages.json
+  ────────────────────────────────────
+  What: Custom greeting messages per person.
+  Format: JSON (plain text, human readable, editable in any text editor)
+  Example:
+    {
+      "Ayush": "Welcome Ayush! Great to see you!",
+      "Rahul": "Good morning Rahul!",
+      "Unknown": "Unknown person detected"
+    }
+  When written: When user saves messages in Messages tab, or when person is added
+  When read: On every /recognize request to attach the right message
+
+  FILE: backend/face_log.json
+  ─────────────────────────────
+  What: History of all recognition events.
+  Format: JSON array
+  Example:
+    [
+      {"name": "Ayush", "confidence": 0.89, "timestamp": "2026-03-29T14:32:11.456"},
+      {"name": "Rahul", "confidence": 0.76, "timestamp": "2026-03-29T14:31:05.123"}
+    ]
+  When written: Every time a known person is recognized
+  Size limit: Keeps last 1000 entries (old entries are dropped)
+  When read: When FaceLog.js fetches /face-log endpoint
+
+  MEMORY (RAM) storage:
+  ──────────────────────
+  engine.known_embeddings (Python dict in RAM):
+    The embeddings.pkl is loaded into this dict on startup.
+    All recognition comparisons happen in RAM (fast, no disk I/O).
+    This is why recognition is fast — no file reading per request.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 14 — CONFIGURATION & TUNING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  RECOGNITION THRESHOLD (backend/src/recognition.py, line ~28)
+  ─────────────────────────────────────────────────────────────
+    RECOGNITION_THRESHOLD: float = 0.6
+
+    Effect: Controls how strict the matching is.
+    Lower value = STRICTER (person must look very similar to be recognized)
+    Higher value = LOOSER (more lenient matching, but more false positives)
+
+    Recommended values:
+      0.5 = very strict (use if getting false positives / wrong IDs)
+      0.6 = balanced default (good for most cases)
+      0.7 = lenient (use if person often goes unrecognized)
+      0.8 = very lenient (not recommended, too many false positives)
+
+  CAPTURE INTERVAL (frontend/src/components/Camera.js, line ~14)
+  ───────────────────────────────────────────────────────────────
+    const CAPTURE_INTERVAL = 1500;  // milliseconds
+
+    Effect: How often a frame is sent for recognition.
+    Lower = faster response but more CPU/network usage
+    Higher = slower response but lighter load
+
+    Recommended values:
+      500ms  = very fast (use with GPU, may lag on CPU-only)
+      1000ms = fast (good balance for capable CPU)
+      1500ms = default (works well on most machines)
+      3000ms = slow (use on older/slower machines)
+
+  SPEECH COOLDOWN (frontend/src/App.js, line ~16)
+  ─────────────────────────────────────────────────
+    const SPEAK_COOLDOWN = 10_000;  // milliseconds (10 seconds)
+
+    Effect: Minimum gap between voice announcements for the same person.
+    Prevents "Welcome Ayush! Welcome Ayush! Welcome Ayush!" every 1.5 seconds.
+
+    Recommended values:
+      5000ms  = short cooldown (use if people walk by briefly)
+      10000ms = default (good for most scenarios)
+      30000ms = long cooldown (use if same person is present for a while)
+
+  RESULT DISPLAY DURATION (frontend/src/components/DisplayWindow.js, line ~14)
+  ─────────────────────────────────────────────────────────────────────────────
+    const RESULT_TIMEOUT = 8_000;  // milliseconds (8 seconds)
+
+    Effect: How long the recognized person's card stays on the display window
+    before returning to the idle/scanning state.
+
+  JPEG QUALITY (frontend/src/components/Camera.js, in captureFrame function)
+  ────────────────────────────────────────────────────────────────────────────
+    canvas.toDataURL('image/jpeg', 0.7)
+    The 0.7 is quality (70%).
+
+    Lower quality (0.4-0.6) = smaller file, faster transfer, may hurt accuracy
+    Higher quality (0.8-0.9) = larger file, slower, better accuracy
+    For local use (same machine), 0.8 is fine. Over network, 0.6-0.7 is better.
+
+  CUSTOM MESSAGES (backend/custom_messages.json)
+  ────────────────────────────────────────────────
+    Edit directly in the file or through the Messages tab in the UI.
+    The "Unknown" key is special — controls the message for unrecognized people.
+    Example:
+      {
+        "Ayush": "Welcome back Ayush! Hope you're having a great day!",
+        "Rahul": "Good morning Rahul, your meeting is at 10 AM.",
+        "Unknown": "Access denied. Please identify yourself."
+      }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 15 — COMMON ERRORS AND FIXES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ERROR: "No module named 'keras_facenet'"
+  ─────────────────────────────────────────
+  Cause: Python can't find the keras-facenet package.
+  Fix: Make sure you're inside the virtual environment:
+    venv\Scripts\activate       (then try again)
+  Or reinstall: pip install keras-facenet
+
+  ERROR: "No face detected" for every frame
+  ──────────────────────────────────────────
+  Causes and fixes:
+    a. Poor lighting → add more light, face the light source
+    b. Face too far from camera → move closer
+    c. Face at extreme angle → face the camera more directly
+    d. Low camera resolution → check camera is working in another app first
+    e. Image sent to backend is blank → check video.readyState in browser console
+
+  ERROR: Wrong person identified / low confidence
+  ─────────────────────────────────────────────────
+  Fixes:
+    a. Add more photos (5+ photos with varied angles and lighting)
+    b. Lower the threshold slightly: RECOGNITION_THRESHOLD = 0.55
+    c. Rebuild embeddings: click "⟳ Rebuild All" in Persons tab
+    d. Make sure dataset photos show a clear, unobstructed face
+
+  ERROR: "Access to XMLHttpRequest blocked by CORS policy"
+  ─────────────────────────────────────────────────────────
+  Cause: Flask-CORS not working or backend not running.
+  Fix: Ensure backend is running (python src/app.py) and CORS(app) is in app.py.
+
+  ERROR: "Camera access failed: Permission denied"
+  ─────────────────────────────────────────────────
+  Cause: Browser blocked camera access.
+  Fix: Click the camera icon in the browser address bar → Allow camera access.
+  Fix: Try Chrome instead of Firefox (better USB camera compatibility).
+
+  ERROR: Backend starts but crashes with "DLL load failed"
+  ─────────────────────────────────────────────────────────
+  Cause: TensorFlow missing Visual C++ redistributables on Windows.
+  Fix: Download and install:
+    Microsoft Visual C++ Redistributable 2019 x64
+    from: https://support.microsoft.com/en-us/topic/the-latest-supported-visual-c-downloads
+
+  ERROR: "FaceNet model download" takes forever or fails
+  ───────────────────────────────────────────────────────
+  Cause: Slow internet, or keras-facenet can't reach the download server.
+  This happens only on first run. The model (~90MB) is downloaded automatically.
+  Fix: Check internet connection. Once downloaded it won't need to download again.
+  Cached at: C:\Users\<YourName>\.keras\models\
+
+  ERROR: USB camera shows in dropdown but gives black video
+  ──────────────────────────────────────────────────────────
+  Cause: Camera driver issue or another application is using it.
+  Fix: Close other apps using the camera (Zoom, Teams, OBS, etc.)
+  Fix: Unplug and replug the USB camera.
+  Fix: Try a different USB port (USB 3.0 ports work better for HD cameras).
+
+  ERROR: Display window shows blank / doesn't update
+  ────────────────────────────────────────────────────
+  Cause: BroadcastChannel blocked (different origins) or window closed.
+  Fix: Both windows must be on http://localhost:3000 (same origin).
+  Fix: Close the display window and reopen it with "Pop Out Display".
+  Fix: Make sure recognition is running in the main window.
+
+  ERROR: "npm start" fails with "react-scripts not found"
+  ─────────────────────────────────────────────────────────
+  Cause: npm install was not run or failed.
+  Fix: cd frontend && npm install
+
+  ERROR: Port 5000 already in use
+  ─────────────────────────────────
+  Cause: Another program is using port 5000.
+  Fix (Windows):
+    netstat -ano | findstr :5000
+    taskkill /PID <PID_number> /F
+  Or change port in app.py: app.run(port=5001) and update API_URL in App.js.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 16 — GLOSSARY OF TERMS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  API (Application Programming Interface)
+    A set of defined ways for software to communicate. Here, Flask defines the API
+    (the URLs and request/response formats) that the React frontend uses.
+
+  Base64
+    A way to encode binary data (like image bytes) as plain text characters.
+    Used because JSON (the text format we send over HTTP) can't contain raw binary.
+    A 100KB image becomes ~133KB of text after base64 encoding.
+
+  BroadcastChannel
+    Browser API for sending messages between windows/tabs of the same website.
+    Like a radio channel — any window can broadcast, any window can listen.
+
+  Component (React)
+    A reusable piece of UI. A function that returns HTML-like JSX code.
+    Can have its own state and lifecycle (mount, update, unmount).
+
+  CORS (Cross-Origin Resource Sharing)
+    Browser security mechanism that blocks JavaScript from calling servers
+    on different origins (protocol + domain + port combinations).
+
+  Embedding (Face Embedding)
+    A numerical representation of a face — a list of 512 floating-point numbers.
+    Similar faces produce similar embeddings (close in 512D space).
+    Also called "face descriptor" or "face encoding."
+
+  Euclidean Distance
+    A way to measure how "far apart" two points are in multi-dimensional space.
+    Formula: sqrt( (a1-b1)² + (a2-b2)² + ... + (aN-bN)² )
+    For 512D embeddings, measures how different two faces are.
+    Range: 0 (identical) to ~2+ (completely different)
+
+  FaceNet
+    A deep neural network architecture by Google (2015).
+    Takes a 160×160 face image → outputs a 512-number embedding.
+    Trained with triplet loss to make same-person embeddings cluster together.
+
+  Hook (React Hook)
+    Functions that let you "hook into" React features like state and lifecycle.
+    useState, useEffect, useRef, useCallback are all hooks.
+
+  HTTP / REST
+    HTTP = HyperText Transfer Protocol. The language of the web.
+    REST = Representational State Transfer. A design style for APIs.
+    GET requests = fetch data. POST requests = send data. DELETE = remove data.
+
+  JSON (JavaScript Object Notation)
+    A text format for structured data. {"name": "Ayush", "age": 25}
+    Used for all communication between frontend and backend.
+
+  JSX
+    JavaScript XML — React's syntax that looks like HTML inside JavaScript.
+    Gets compiled to regular JavaScript by Babel.
+    Example: <div className="box"><h1>Hello</h1></div>
+
+  MTCNN (Multi-task Cascaded Convolutional Networks)
+    A deep learning model for face detection.
+    Uses 3 sequential neural networks to progressively refine face locations.
+    Returns bounding box + confidence + landmark positions.
+
+  Neural Network
+    A mathematical model loosely inspired by the brain.
+    Consists of layers of "neurons" that apply transformations to input data.
+    "Deep" = many layers. Learns from training data.
+
+  NumPy Array (ndarray)
+    Python's fast numerical array. Images stored as (height, width, channels) arrays.
+    Core data structure used by all AI/image libraries.
+
+  Pickle
+    Python's built-in object serialization format.
+    Converts Python objects (lists, dicts, NumPy arrays) to binary files and back.
+    Used to save/load face embeddings without recalculating them.
+
+  Port
+    A number (0-65535) that identifies a specific application on a computer.
+    Flask runs on port 5000. React dev server runs on port 3000.
+    http://localhost:5000 = "talk to the program on this machine using port 5000"
+
+  Pre-trained Model
+    A neural network that was already trained (often by a large company with
+    lots of data and compute). We load it and use it without training ourselves.
+    keras-facenet provides the pre-trained FaceNet weights.
+
+  React State
+    Data stored inside a React component that, when changed, triggers a re-render.
+    const [name, setName] = useState('') — name is state, setName updates it.
+
+  SpeechSynthesis
+    Browser built-in API for converting text to speech using the OS's voice engine.
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance("Hello"))
+
+  TensorFlow
+    Google's open-source machine learning framework.
+    Runs neural network computations efficiently on CPU or GPU.
+    Both MTCNN and FaceNet use TensorFlow as their computation backend.
+
+  Threshold (Recognition Threshold)
+    The cutoff distance value for deciding "recognized" vs "unknown".
+    Distance < threshold → recognized. Distance >= threshold → unknown.
+
+  Transfer Learning
+    Using a model that was pre-trained on a large dataset for a new task.
+    We use FaceNet (trained on millions of faces) to recognize specific people
+    from just 3-5 photos each — without any training of our own.
+
+  Virtual Environment (venv)
+    An isolated Python installation with its own packages.
+    Prevents conflicts between different Python projects on the same machine.
+    Activated with: venv\Scripts\activate
+
+  WebSocket vs HTTP
+    HTTP: Request → Response → done (connection closed). Used here.
+    WebSocket: Persistent connection, real-time bidirectional communication.
+    We use HTTP polling (every 1.5s) rather than WebSocket for simplicity.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+END OF DOCUMENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Total packages installed: 44 Python + 4 JavaScript direct dependencies
+  Project files created: 15 source files
+  Lines of code: ~2000 (backend) + ~1800 (frontend)
+
+  Quick start reminder:
+    Terminal 1: cd backend && venv\Scripts\activate && python src/app.py
+    Terminal 2: cd frontend && npm start
+    Browser:    http://localhost:3000
