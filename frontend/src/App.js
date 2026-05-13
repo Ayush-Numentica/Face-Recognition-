@@ -38,6 +38,7 @@ const SPEAK_COOLDOWN = 10_000;           // ms between voice announcements
 const BROADCAST_CH   = 'face-recognition-display';
 
 const DEFAULT_RTSP_URL = 'rtsp://admin:L2BC212E@192.168.50.239:554/cam/realmonitor?channel=1&subtype=0'; // leave '' to disable auto-connect
+const AUTO_OPEN_DISPLAY = true;
 
 // ── Mode detection ────────────────────────────────────────────────────────────
 const IS_DISPLAY = new URLSearchParams(window.location.search).get('mode') === 'display';
@@ -120,6 +121,16 @@ function MainApp() {
     autoConnectedRef.current = true;
     // small delay so /health check runs first and backend is ready
     const t = setTimeout(() => { startWireless(); }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Auto-open display window on render ───────────────────────────────
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!AUTO_OPEN_DISPLAY || autoOpenedRef.current) return;
+    autoOpenedRef.current = true;
+    const t = setTimeout(() => { openDisplayWindow(); }, 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
