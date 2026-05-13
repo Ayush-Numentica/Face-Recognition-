@@ -37,6 +37,8 @@ const API_URL        = 'http://localhost:5000';
 const SPEAK_COOLDOWN = 10_000;           // ms between voice announcements
 const BROADCAST_CH   = 'face-recognition-display';
 
+const DEFAULT_RTSP_URL = 'rtsp://admin:L2BC212E@192.168.50.239:554/cam/realmonitor?channel=1&subtype=0'; // leave '' to disable auto-connect
+
 // ── Mode detection ────────────────────────────────────────────────────────────
 const IS_DISPLAY = new URLSearchParams(window.location.search).get('mode') === 'display';
 
@@ -68,8 +70,8 @@ function MainApp() {
   const [idleVideoSrc,   setIdleVideoSrc]   = useState('');
   const [videoUrlInput,  setVideoUrlInput]  = useState('');
   const [videoLoading,   setVideoLoading]   = useState(false);
-  const [camMode,        setCamMode]        = useState('local');   // 'local' | 'wireless'
-  const [wirelessUrl,    setWirelessUrl]    = useState('');
+  const [camMode,        setCamMode]        = useState('wireless');   // 'local' | 'wireless'
+  const [wirelessUrl,    setWirelessUrl]    = useState(DEFAULT_RTSP_URL);
   const [wirelessActive, setWirelessActive] = useState(false);
   const [wirelessError,  setWirelessError]  = useState('');
   const wirelessPollRef = useRef(null);
@@ -109,6 +111,18 @@ function MainApp() {
       setKnownPersons(data.persons || []);
     } catch (e) { console.error('fetchPersons:', e.message); }
   };
+
+  // ── Auto-connect to wireless camera on mount ─────────────────────────
+  const autoConnectedRef = useRef(false);
+  useEffect(() => {
+    if (!DEFAULT_RTSP_URL || autoConnectedRef.current) return;
+    if (camMode !== 'wireless') return;
+    autoConnectedRef.current = true;
+    // small delay so /health check runs first and backend is ready
+    const t = setTimeout(() => { startWireless(); }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchMessages = async () => {
     try {
