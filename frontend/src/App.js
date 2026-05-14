@@ -125,15 +125,15 @@ function MainApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Auto-open display window on render ───────────────────────────────
-  const autoOpenedRef = useRef(false);
-  useEffect(() => {
-    if (!AUTO_OPEN_DISPLAY || autoOpenedRef.current) return;
-    autoOpenedRef.current = true;
-    const t = setTimeout(() => { openDisplayWindow(); }, 300);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // // ── Auto-open display window on render ───────────────────────────────
+  // const autoOpenedRef = useRef(false);
+  // useEffect(() => {
+  //   if (!AUTO_OPEN_DISPLAY || autoOpenedRef.current) return;
+  //   autoOpenedRef.current = true;
+  //   const t = setTimeout(() => { openDisplayWindow(); }, 300);
+  //   return () => clearTimeout(t);
+  //   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, []);
 
   const fetchMessages = async () => {
     try {
