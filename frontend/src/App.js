@@ -33,7 +33,7 @@ import DisplayWindow from './components/DisplayWindow';
 import { saveVideoBlob, saveVideoUrl, loadVideoSrc, clearVideo } from './videoStore';
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const API_URL        = 'http://localhost:5000';
+const API_URL        = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 const SPEAK_COOLDOWN = 10_000;           // ms between voice announcements
 const BROADCAST_CH   = 'face-recognition-display';
 
