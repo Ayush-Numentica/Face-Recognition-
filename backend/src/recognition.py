@@ -120,7 +120,9 @@ class FaceRecognitionEngine:
         results = self.detector.detect_faces(rgb)
         faces = []
         for det in results:
-            if det["confidence"] < 0.80:
+            # Lower the detection confidence threshold so MTCNN can still
+            # return reasonably good faces in lower-quality or mobile camera frames.
+            if det["confidence"] < 0.70:
                 continue
             face_rgb, box = self._crop_face(rgb, bgr_image.shape, det["box"])
             if face_rgb is not None:

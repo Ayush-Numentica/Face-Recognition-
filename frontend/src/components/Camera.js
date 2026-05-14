@@ -142,8 +142,9 @@ export default function Camera({ isRunning, onResult, apiUrl }) {
 
   // ── Draw bounding boxes for ALL detected faces ───────────────────────
   const drawBoxes = useCallback((results) => {
-    const video  = videoRef.current;
-    const canvas = overlayRef.current;
+    const video         = videoRef.current;
+    const canvas        = overlayRef.current;
+    const captureCanvas = captureRef.current;
     if (!video || !canvas) return;
 
     const vw = video.videoWidth  || 640;
@@ -152,13 +153,20 @@ export default function Camera({ isRunning, onResult, apiUrl }) {
       canvas.width = vw; canvas.height = vh;
     }
 
+    const scaleX = captureCanvas?.width ? vw / captureCanvas.width : 1;
+    const scaleY = captureCanvas?.height ? vh / captureCanvas.height : 1;
+
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, vw, vh);
     if (!results?.length) return;
 
     results.forEach((result) => {
       if (!result?.box) return;
-      const [bx, by, bw, bh] = result.box;
+      const [rawBx, rawBy, rawBw, rawBh] = result.box;
+      const bx = rawBx * scaleX;
+      const by = rawBy * scaleY;
+      const bw = rawBw * scaleX;
+      const bh = rawBh * scaleY;
       const isKnown = result.detected && result.name !== 'Unknown';
       const color   = isKnown ? COLOR_KNOWN : COLOR_UNKNOWN;
 
