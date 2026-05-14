@@ -17,12 +17,17 @@
  *   { type: 'clear' }
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { loadVideoSrc } from '../videoStore';
 
 const API_URL        = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 const RESULT_TIMEOUT = 3_000;  // clear result 3s after last detection
 
+// Default wireless camera — also defined in App.js (DEFAULT_RTSP_URL).
+// Display2 polls this directly so it doesn't need MainApp to be open.
+const DEFAULT_RTSP_URL = 'rtsp://admin:L2BC212E@192.168.50.239:554/cam/realmonitor?channel=1&subtype=0';
+const POLL_INTERVAL_MS = 200;
+  
 // ── PersonAvatar ──────────────────────────────────────────────────────────────
 function PersonAvatar({ name }) {
   const [src, setSrc] = useState(null);
@@ -102,7 +107,7 @@ function FaceLayout({ faces, show }) {
 }
 
 // ── Main DisplayWindow ────────────────────────────────────────────────────────
-export default function DisplayWindow({ channelName }) {
+export default function DisplayWindow({ channelName, showBack = false }) {
   const [faces,       setFaces]       = useState([]);
   const [time,        setTime]        = useState('');
   const [date,        setDate]        = useState('');
@@ -154,6 +159,26 @@ export default function DisplayWindow({ channelName }) {
     return () => clearInterval(id);
   }, []);
 
+  // ── Shared result-handling helpers ────────────────────────────────────
+  // Used by both the BroadcastChannel listener (manual pop-out) and the
+  // direct polling loop below (self-sufficient display2 mode).
+  const applyResults = useCallback((payload) => {
+    if (!Array.isArray(payload) || !payload.length) return;
+    clearTimeout(clearTimerRef.current);
+    setShow(false);
+    setTimeout(() => { setFaces(payload); setShow(true); }, 50);
+    clearTimerRef.current = setTimeout(() => {
+      setShow(false);
+      setTimeout(() => setFaces([]), 400);
+    }, RESULT_TIMEOUT);
+  }, []);
+
+  const applyClear = useCallback(() => {
+    clearTimeout(clearTimerRef.current);
+    setShow(false);
+    setTimeout(() => setFaces([]), 400);
+  }, []);
+
   // ── BroadcastChannel ─────────────────────────────────────────────────
   useEffect(() => {
     channelRef.current = new BroadcastChannel(channelName);
@@ -161,30 +186,52 @@ export default function DisplayWindow({ channelName }) {
     channelRef.current.onmessage = (event) => {
       const { type, payload } = event.data;
 
-      if (type === 'results' && Array.isArray(payload) && payload.length) {
-        clearTimeout(clearTimerRef.current);
-        setShow(false);
-        setTimeout(() => { setFaces(payload); setShow(true); }, 50);
-
-        clearTimerRef.current = setTimeout(() => {
-          setShow(false);
-          setTimeout(() => setFaces([]), 400);
-        }, RESULT_TIMEOUT);
-      }
-
-      if (type === 'clear') {
-        clearTimeout(clearTimerRef.current);
-        setShow(false);
-        setTimeout(() => setFaces([]), 400);
-      }
-
-      if (type === 'set-video') {
-        setIdleVideo(event.data.src || '');
-      }
+      if (type === 'results')   applyResults(payload);
+      if (type === 'clear')     applyClear();
+      if (type === 'set-video') setIdleVideo(event.data.src || '');
     };
 
     return () => { channelRef.current?.close(); clearTimeout(clearTimerRef.current); };
-  }, [channelName]);
+  }, [channelName, applyResults, applyClear]);
+
+  // ── Self-sufficient polling (display2 mode only) ──────────────────────
+  // Starts the wireless camera on the backend, then polls /ip-camera/result
+  // every 200 ms — same cadence MainApp uses. Cleanly stops the stream on
+  // unmount so leaving the page doesn't leave the backend churning.
+  useEffect(() => {
+    if (!showBack) return;
+    let pollId  = null;
+    let active  = true;
+
+    const poll = () => {
+      fetch(`${API_URL}/ip-camera/result`)
+        .then(r => r.json())
+        .then(data => {
+          if (!active) return;
+          const known = Array.isArray(data) ? data.filter(f => f.name !== 'Unknown') : [];
+          if (known.length) applyResults(known);
+          else              applyClear();
+        })
+        .catch(() => { /* transient network errors ignored */ });
+    };
+
+    fetch(`${API_URL}/ip-camera/start`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ url: DEFAULT_RTSP_URL }),
+    })
+    .then(() => {
+      if (!active) return;
+      pollId = setInterval(poll, POLL_INTERVAL_MS);
+    })
+    .catch(err => console.error('display2: could not start IP camera —', err?.message));
+
+    return () => {
+      active = false;
+      if (pollId) clearInterval(pollId);
+      fetch(`${API_URL}/ip-camera/stop`, { method: 'POST' }).catch(() => {});
+    };
+  }, [showBack, applyResults, applyClear]);
 
   const hasResult = faces.length > 0;
 
@@ -199,6 +246,14 @@ export default function DisplayWindow({ channelName }) {
       {/* Header */}
       <div className="dw-header">
         <div className="dw-header-left">
+          {showBack && (
+            <button
+              className="dw-settings-btn"
+              onClick={() => { window.location.href = `${window.location.origin}/?mode=control`; }}
+              title="Back to main control panel"
+              style={{ marginRight: '0.75rem' }}
+            >← Back</button>
+          )}
           <span className="dw-brand-icon">🎭</span>
           <span className="dw-brand-name">NumenScan</span>
         </div>

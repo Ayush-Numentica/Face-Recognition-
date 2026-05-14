@@ -41,12 +41,16 @@ const DEFAULT_RTSP_URL = 'rtsp://admin:L2BC212E@192.168.50.239:554/cam/realmonit
 // const AUTO_OPEN_DISPLAY = true;
 
 // ── Mode detection ────────────────────────────────────────────────────────────
-const IS_DISPLAY = new URLSearchParams(window.location.search).get('mode') === 'display';
+const QUERY_MODE = new URLSearchParams(window.location.search).get('mode');
+const IS_DISPLAY  = QUERY_MODE === 'display';
+const IS_DISPLAY2 = QUERY_MODE === 'display2';
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  // If this window was opened as the dedicated display, render only that
-  if (IS_DISPLAY) return <DisplayWindow channelName={BROADCAST_CH} />;
+  // Both display modes render the same component — they receive results
+  // from the main window via BroadcastChannel, so any number of subscribers works.
+  if (IS_DISPLAY)  return <DisplayWindow channelName={BROADCAST_CH} />;
+  if (IS_DISPLAY2) return <DisplayWindow channelName={BROADCAST_CH} showBack />;
 
   return <MainApp />;
 }
@@ -125,15 +129,15 @@ function MainApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // // ── Auto-open display window on render ───────────────────────────────
-  // const autoOpenedRef = useRef(false);
-  // useEffect(() => {
-  //   if (!AUTO_OPEN_DISPLAY || autoOpenedRef.current) return;
-  //   autoOpenedRef.current = true;
-  //   const t = setTimeout(() => { openDisplayWindow(); }, 300);
-  //   return () => clearTimeout(t);
-  //   // eslint-disable-next-line react-hooks/exhaustive-deps
-  // }, []);
+  // ── Auto-route to display2 on render ──────────────────────────────────
+  // Same-tab navigation — no popup, no new window. Skips when any `mode`
+  // param is already present so the "Back" button on display2 can land
+  // on /?mode=control without being redirected again.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('mode')) return;
+    window.location.replace(`${window.location.origin}/?mode=display2`);
+  }, []);
 
   const fetchMessages = async () => {
     try {
