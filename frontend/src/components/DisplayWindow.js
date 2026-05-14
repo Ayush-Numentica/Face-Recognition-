@@ -20,7 +20,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { loadVideoSrc } from '../videoStore';
 
-const API_URL        = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const API_URL        = process.env.REACT_APP_API_URL || 'http://13.203.80.165:8080';
 const RESULT_TIMEOUT = 3_000;  // clear result 3s after last detection
 
 // Default wireless camera — also defined in App.js (DEFAULT_RTSP_URL).
