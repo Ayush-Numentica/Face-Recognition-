@@ -20,7 +20,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { loadVideoSrc } from '../videoStore';
 
-const API_URL        = 'http://localhost:5000';
+const API_URL        = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 const RESULT_TIMEOUT = 3_000;  // clear result 3s after last detection
 
 // ── PersonAvatar ──────────────────────────────────────────────────────────────
