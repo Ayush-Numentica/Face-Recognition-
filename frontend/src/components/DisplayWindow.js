@@ -16,28 +16,50 @@
  *   { type: 'results', payload: [ {name, message, confidence, detected}, … ] }
  *   { type: 'clear' }
  */
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { loadVideoSrc } from '../videoStore';
 
-const API_URL        =  'http://localhost:5000';
-const RESULT_TIMEOUT = 3_000;  // clear result 3s after last detection
+const API_URL        = process.env.REACT_APP_API_URL || 'https://face.recog.nui-apps.click' || 'http://localhost:5000';
+const RESULT_TIMEOUT = 5_000;  // hold detection card 5s after last detection
+const DEBOUNCE_MS    = 1_000;  // a new face set must persist this long before the card switches
 
 // Default wireless camera — also defined in App.js (DEFAULT_RTSP_URL).
 // Display2 polls this directly so it doesn't need MainApp to be open.
-const DEFAULT_RTSP_URL = 'rtsp://admin:L2BC212E@192.168.50.239:554/cam/realmonitor?channel=1&subtype=0';
+const DEFAULT_RTSP_URL = 'rtsp://admin:L2BC212E@192.168.50.239:554/cam/realmonitor?channel=1&subtype=1';
 const POLL_INTERVAL_MS = 200;
-  
+
+// Idle background video — bundled with the frontend so every device gets
+// the same default without needing IndexedDB. User uploads override this.
+const DEFAULT_VIDEO_SRC = '/idle.mp4';
+
+// Module-level avatar cache: name → base64 data-URL (or '' if no photo).
+// Persists across re-mounts so the same person is never re-fetched.
+const avatarCache = new Map();
+
 // ── PersonAvatar ──────────────────────────────────────────────────────────────
 function PersonAvatar({ name }) {
-  const [src, setSrc] = useState(null);
+  // Lazy initial state: synchronously read from cache if already loaded.
+  const [src, setSrc] = useState(() =>
+    avatarCache.has(name) ? avatarCache.get(name) : null,
+  );
 
   useEffect(() => {
+    if (avatarCache.has(name)) {
+      setSrc(avatarCache.get(name));
+      return;
+    }
     setSrc(null);
     fetch(`${API_URL}/person-image/${encodeURIComponent(name)}`)
       .then(r => { if (!r.ok) throw new Error(); return r.json(); })
-      .then(d => setSrc(d.image || ''))
-      .catch(() => setSrc(''));
+      .then(d => {
+        const img = d.image || '';
+        avatarCache.set(name, img);
+        setSrc(img);
+      })
+      .catch(() => {
+        avatarCache.set(name, '');
+        setSrc('');
+      });
   }, [name]);
 
   if (src === null) return null;
@@ -75,8 +97,11 @@ function FaceLayout({ faces, show }) {
       {/* Glow behind the whole card */}
       <div className={`dw-glow-orb ${allKnown ? 'glow-green' : 'glow-red'}`} />
 
-      {/* Avatars row */}
-      <div className="dw-avatars-row">
+      {/* Avatars row — CSS scales avatar size per count (see App.css) */}
+      <div className={`dw-avatars-row ${
+        faces.length === 1 ? 'count-1' :
+        faces.length === 2 ? 'count-2' : 'count-many'
+      }`}>
         {faces.map((face, i) => {
           const isKnown = face.name !== 'Unknown';
           return (
@@ -86,7 +111,7 @@ function FaceLayout({ faces, show }) {
                   ? <PersonAvatar key={face.name} name={face.name} />
                   : '?'}
               </div>
-              <div className="dw-avatar-name">{face.name}</div>
+              {/* <div className="dw-avatar-name">{face.name}</div> */}
             </div>
           );
         })}
@@ -118,8 +143,11 @@ export default function DisplayWindow({ channelName, showBack = false }) {
   const [inputW,      setInputW]      = useState('');
   const [inputH,      setInputH]      = useState('');
 
-  const clearTimerRef = useRef(null);
-  const channelRef    = useRef(null);
+  const clearTimerRef    = useRef(null);
+  const channelRef       = useRef(null);
+  const currentFacesKey  = useRef('');   // sorted "name1|name2|…" of card shown now
+  const pendingKeyRef    = useRef('');   // candidate set awaiting debounce
+  const pendingSinceRef  = useRef(0);    // timestamp the candidate first appeared
 
   // Populate inputs with current window size when panel opens
   const openSettings = () => {
@@ -135,9 +163,30 @@ export default function DisplayWindow({ channelName, showBack = false }) {
     setShowSettings(false);
   };
 
-  // ── Load idle video from IndexedDB on mount ───────────────────────────
+  // ── Load idle video — IndexedDB upload wins, falls back to bundled default ──
   useEffect(() => {
-    loadVideoSrc().then(src => { if (src) setIdleVideo(src); }).catch(() => {});
+    loadVideoSrc()
+      .then(src => setIdleVideo(src || DEFAULT_VIDEO_SRC))
+      .catch(() => setIdleVideo(DEFAULT_VIDEO_SRC));
+  }, []);
+
+  // ── Pre-load all known avatars into the cache ─────────────────────────
+  // Warms the cache before any face is detected so the first detection
+  // shows the photo instantly — no network round-trip on render.
+  useEffect(() => {
+    fetch(`${API_URL}/persons`)
+      .then(r => r.json())
+      .then(({ persons }) => {
+        if (!Array.isArray(persons)) return;
+        persons.forEach(p => {
+          if (avatarCache.has(p.name)) return;
+          fetch(`${API_URL}/person-image/${encodeURIComponent(p.name)}`)
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => avatarCache.set(p.name, d?.image || ''))
+            .catch(() => avatarCache.set(p.name, ''));
+        });
+      })
+      .catch(() => { /* ignore — on-demand fetch still works */ });
   }, []);
 
   // ── Clock ──────────────────────────────────────────────────────────────
@@ -159,24 +208,56 @@ export default function DisplayWindow({ channelName, showBack = false }) {
     return () => clearInterval(id);
   }, []);
 
-  // ── Shared result-handling helpers ────────────────────────────────────
+  // ── Shared result-handling helper ─────────────────────────────────────
   // Used by both the BroadcastChannel listener (manual pop-out) and the
   // direct polling loop below (self-sufficient display2 mode).
+  //
+  // Behaviour:
+  //   • Same set still in view        → keep card as is, just reset fade timer.
+  //   • Card empty → first detection  → show immediately (no debounce).
+  //   • Different set                 → only switch once it has persisted for
+  //                                     DEBOUNCE_MS, so 1-2 frame detection
+  //                                     blips don't make the card flicker.
+  //   • No detection for RESULT_TIMEOUT → card fades out.
   const applyResults = useCallback((payload) => {
     if (!Array.isArray(payload) || !payload.length) return;
+
+    const key = payload.map(f => f.name).sort().join('|');
     clearTimeout(clearTimerRef.current);
-    setShow(false);
-    setTimeout(() => { setFaces(payload); setShow(true); }, 50);
+
+    const commit = () => {
+      currentFacesKey.current = key;
+      pendingKeyRef.current   = '';
+      setShow(false);
+      setTimeout(() => { setFaces(payload); setShow(true); }, 50);
+    };
+
+    if (key === currentFacesKey.current) {
+      // Same people still in view — drop any pending change, keep card as is.
+      pendingKeyRef.current = '';
+    } else if (currentFacesKey.current === '') {
+      // Nothing on screen yet — show the first detection instantly.
+      commit();
+    } else if (key === pendingKeyRef.current) {
+      // A different set we've been tracking — switch only once it has been
+      // seen continuously for DEBOUNCE_MS (ignores momentary blips).
+      if (Date.now() - pendingSinceRef.current >= DEBOUNCE_MS) {
+        commit();
+      }
+    } else {
+      // First sighting of a new candidate set — start its debounce clock.
+      pendingKeyRef.current   = key;
+      pendingSinceRef.current = Date.now();
+    }
+
     clearTimerRef.current = setTimeout(() => {
       setShow(false);
-      setTimeout(() => setFaces([]), 400);
+      setTimeout(() => {
+        setFaces([]);
+        currentFacesKey.current = '';
+        pendingKeyRef.current   = '';
+      }, 400);
     }, RESULT_TIMEOUT);
-  }, []);
-
-  const applyClear = useCallback(() => {
-    clearTimeout(clearTimerRef.current);
-    setShow(false);
-    setTimeout(() => setFaces([]), 400);
   }, []);
 
   // ── BroadcastChannel ─────────────────────────────────────────────────
@@ -187,12 +268,13 @@ export default function DisplayWindow({ channelName, showBack = false }) {
       const { type, payload } = event.data;
 
       if (type === 'results')   applyResults(payload);
-      if (type === 'clear')     applyClear();
-      if (type === 'set-video') setIdleVideo(event.data.src || '');
+      if (type === 'set-video') setIdleVideo(event.data.src || DEFAULT_VIDEO_SRC);
+      // 'clear' messages are intentionally ignored — the 15s auto-timer
+      // inside applyResults handles card disappearance.
     };
 
     return () => { channelRef.current?.close(); clearTimeout(clearTimerRef.current); };
-  }, [channelName, applyResults, applyClear]);
+  }, [channelName, applyResults]);
 
   // ── Self-sufficient polling (display2 mode only) ──────────────────────
   // Starts the wireless camera on the backend, then polls /ip-camera/result
@@ -210,7 +292,8 @@ export default function DisplayWindow({ channelName, showBack = false }) {
           if (!active) return;
           const known = Array.isArray(data) ? data.filter(f => f.name !== 'Unknown') : [];
           if (known.length) applyResults(known);
-          else              applyClear();
+          // else: no face this tick — the 15s timer set by the last
+          // detection will fade the card naturally.
         })
         .catch(() => { /* transient network errors ignored */ });
     };
@@ -231,7 +314,7 @@ export default function DisplayWindow({ channelName, showBack = false }) {
       if (pollId) clearInterval(pollId);
       fetch(`${API_URL}/ip-camera/stop`, { method: 'POST' }).catch(() => {});
     };
-  }, [showBack, applyResults, applyClear]);
+  }, [showBack, applyResults]);
 
   const hasResult = faces.length > 0;
 
@@ -239,12 +322,32 @@ export default function DisplayWindow({ channelName, showBack = false }) {
     <div className="dw-root">
       <div className="dw-grid" />
 
+      {/* Invisible hotspot — top-left corner. Click to return to the control
+          panel. Only in display2 (showBack); replaces the visible header
+          back-button so it never covers the video. */}
+      {showBack && (
+        <div
+          onClick={() => { window.location.href = `${window.location.origin}/?mode=control`; }}
+          title="Back to control panel"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '120px',
+            height: '120px',
+            zIndex: 9999,
+            cursor: 'pointer',
+            background: 'transparent',
+          }}
+        />
+      )}
+
       {!hasResult && !idleVideo && (
         <div className="dw-scan-line" style={{ top: `${scanLine}%` }} />
       )}
 
       {/* Header */}
-      <div className="dw-header">
+      {/* <div className="dw-header">
         <div className="dw-header-left">
           {showBack && (
             <button
@@ -262,10 +365,10 @@ export default function DisplayWindow({ channelName, showBack = false }) {
           <div className="dw-date">{date}</div>
         </div>
         <button className="dw-settings-btn" onClick={openSettings} title="Resize window">⚙</button>
-      </div>
+      </div> */}
 
       {/* Settings panel */}
-      {showSettings && (
+      {/* {showSettings && (
         <div className="dw-settings-panel">
           <div className="dw-settings-title">Resize Window</div>
           <div className="dw-settings-row">
@@ -293,7 +396,7 @@ export default function DisplayWindow({ channelName, showBack = false }) {
             <button className="dw-btn-cancel" onClick={() => setShowSettings(false)}>Cancel</button>
           </div>
         </div>
-      )}
+      )} */}
 
       {/* Background video — always plays when set, behind everything */}
       {idleVideo && (
@@ -327,12 +430,12 @@ export default function DisplayWindow({ channelName, showBack = false }) {
       </div>
 
       {/* Footer */}
-      <div className="dw-footer">
+      {/* <div className="dw-footer">
         <span>POWERED BY FACENET + MTCNN</span>
         <span className={`dw-live ${hasResult ? 'dw-live-active' : ''}`}>
           <span className="dw-live-dot" /> LIVE
         </span>
-      </div>
+      </div> */}
     </div>
   );
 }

@@ -289,6 +289,40 @@ body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', syste
   object-fit: contain;
 }
 
+/* ── Detection-zone overlay ─────────────────────────────────────────── */
+.zone-rect {
+  position: absolute;
+  border: 2px solid #00c8ff;
+  background: rgba(0, 200, 255, 0.12);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);  /* dim outside the zone */
+  pointer-events: none;
+  border-radius: 2px;
+}
+.zone-hint {
+  position: absolute;
+  top: 8px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,.7);
+  color: #00c8ff;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.zone-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.7rem;
+}
+.zone-status {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+
 /* ── Camera container ───────────────────────────────────────────────── */
 .camera-container { width: 100%; max-width: 720px; }
 
@@ -1128,7 +1162,7 @@ body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', syste
   height: 100%;
   object-fit: cover;
   z-index: 1;        /* above dw-grid (z-index:auto) but below header/body/footer */
-  opacity: 0.75;
+  opacity: 1;
 }
 
 .dw-idle-dots {
@@ -1258,13 +1292,14 @@ body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', syste
   align-items: center;
   gap: 3vmin;
   padding: 4vmin 5vmin;
-  border-radius: 3vmin;
-  border: 1px solid;
+  /* border-radius: 3vmin; */
+  /* border: 1px solid; */
   width: 88vw;
   max-width: min(88vw, 1100px);
   max-height: 84vh;
   overflow: hidden;
   box-sizing: border-box;
+  margin-top: 200px;   /* nudge the card slightly lower on screen */
 }
 
 /* Row of avatars inside the unified card */
@@ -1299,11 +1334,11 @@ body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', syste
   white-space: nowrap;
 }
 
-.dw-known   { border-color: rgba(0,230,118,.5); background: rgba(0,10,5,.55);   backdrop-filter: blur(12px); }
+/* .dw-known   { border-color: rgba(0,230,118,.5); background: rgba(0,10,5,.55);   backdrop-filter: blur(12px); } */
 .dw-unknown { border-color: rgba(255,23,68,.5);  background: rgba(10,0,2,.55);    backdrop-filter: blur(12px); }
 
 /* Corner bracket decorations */
-.dw-bracket {
+/* .dw-bracket {
   position: absolute;
   width: 20px; height: 20px;
   border-color: currentColor;
@@ -1315,11 +1350,11 @@ body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', syste
 .dw-bracket-tl { top: -1px; left: -1px;  border-top-width: 2px; border-left-width:  2px; border-radius: 4px 0 0 0; }
 .dw-bracket-tr { top: -1px; right: -1px; border-top-width: 2px; border-right-width: 2px; border-radius: 0 4px 0 0; }
 .dw-bracket-bl { bottom: -1px; left: -1px;  border-bottom-width: 2px; border-left-width:  2px; border-radius: 0 0 0 4px; }
-.dw-bracket-br { bottom: -1px; right: -1px; border-bottom-width: 2px; border-right-width: 2px; border-radius: 0 0 4px 0; }
+.dw-bracket-br { bottom: -1px; right: -1px; border-bottom-width: 2px; border-right-width: 2px; border-radius: 0 0 4px 0; } */
 
 /* Glow orb */
 @keyframes dw-glow { 0%,100% { opacity:.5; transform: scale(1); } 50% { opacity:.8; transform: scale(1.15); } }
-.dw-glow-orb {
+/* .dw-glow-orb {
   position: absolute;
   width: 30%; height: 30%;
   border-radius: 50%;
@@ -1327,29 +1362,59 @@ body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', syste
   pointer-events: none;
   animation: dw-glow 3s ease-in-out infinite;
   z-index: -1;
-}
-.glow-green { background: rgba(0,230,118,.15); }
+} */
+/* .glow-green { background: rgba(0,230,118,.15); } */
 .glow-red   { background: rgba(255,23,68,.15); }
 
 /* Avatar — purely viewport-relative, no fixed px minimums */
 .dw-avatar {
   width: min(20vmin, 260px);
   height: min(20vmin, 260px);
-  border-radius: 20%;
+  border-radius: 10%;
   font-size: min(7vmin, 7rem);
   font-weight: 900;
   display: flex; align-items: center; justify-content: center;
-  border: 3px solid;
+  border: 5px solid;
   overflow: hidden;
   flex-shrink: 0;
 }
 /* Scale down per-avatar when multiple share the row */
 .dw-avatars-row .dw-avatar {
-  width: min(16vmin, 200px);
-  height: min(16vmin, 200px);
+  width: min(40vmin, 350px);
+  height: min(40vmin, 350px);
   font-size: min(5.5vmin, 6rem);
 }
-.avatar-known   { background: rgba(0,230,118,.15); border-color: rgba(0,230,118,.6); color: #00e676; }
+
+/* ── Count-aware sizing ───────────────────────────────────────────────── */
+/* 1 person → keep configured "full" size (rule above applies as-is). */
+
+/* 2 people → smaller, both fit on one horizontal row. */
+.dw-avatars-row.count-2 .dw-avatar {
+  width: min(30vmin, 280px);
+  height: min(30vmin, 280px);
+  font-size: min(4.5vmin, 5rem);
+}
+.dw-avatars-row.count-2 .dw-avatar-name {
+  font-size: 2.2vmin;
+  max-width: 18vmin;
+}
+
+/* 3+ people → smaller still, wrap into 2 rows (2 per row).
+   max-width on the row forces the third avatar to wrap. */
+.dw-avatars-row.count-many {
+  max-width: 65vmin;
+  row-gap: 3vmin;
+}
+.dw-avatars-row.count-many .dw-avatar {
+  width: min(22vmin, 200px);
+  height: min(22vmin, 200px);
+  font-size: min(3.5vmin, 4rem);
+}
+.dw-avatars-row.count-many .dw-avatar-name {
+  font-size: 1.8vmin;
+  max-width: 14vmin;
+}
+.avatar-known   { background: rgba(0,230,118,.15); border-color: rgba(157, 82, 7, 0.6); color: #0d89b3; }
 .avatar-unknown { background: rgba(255,23,68,.15);  border-color: rgba(255,23,68,.6);  color: #ff1744; }
 
 /* Status badge */
@@ -1376,14 +1441,15 @@ body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', syste
 
 /* Custom message */
 .dw-message {
-  font-size: min(4vmin, 3.5rem);
+  font-family: 'Garamond Rough', 'EB Garamond', Garamond, 'Adobe Garamond Pro', 'Times New Roman', serif;
+  font-size: 28px;
   font-weight: 500;
   text-align: center;
   max-width: 90%;
   line-height: 1.4;
   word-break: break-word;
 }
-.msg-known   { color: rgba(0,230,118,.9); }
+.msg-known   { color: rgba(255, 255, 255, 0.9); }
 .msg-unknown { color: rgba(255,23,68,.9); }
 
 /* Confidence */

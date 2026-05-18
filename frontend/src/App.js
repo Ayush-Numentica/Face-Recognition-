@@ -33,11 +33,15 @@ import DisplayWindow from './components/DisplayWindow';
 import { saveVideoBlob, saveVideoUrl, loadVideoSrc, clearVideo } from './videoStore';
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const API_URL        =  'http://localhost:5000';
+const API_URL        = process.env.REACT_APP_API_URL || 'https://face.recog.nui-apps.click' || 'http://localhost:5000';
 const SPEAK_COOLDOWN = 10_000;           // ms between voice announcements
 const BROADCAST_CH   = 'face-recognition-display';
 
-const DEFAULT_RTSP_URL = 'rtsp://admin:L2BC212E@192.168.50.239:554/cam/realmonitor?channel=1&subtype=0'; // leave '' to disable auto-connect
+const DEFAULT_RTSP_URL = 'rtsp://admin:L2BC212E@192.168.50.239:554/cam/realmonitor?channel=1&subtype=1'; // leave '' to disable auto-connect
+
+// Idle background video — bundled in frontend/public so every device gets
+// the same default without needing IndexedDB. User uploads override this.
+const DEFAULT_VIDEO_SRC = '/idle.mp4';
 // const AUTO_OPEN_DISPLAY = true;
 
 // ── Mode detection ────────────────────────────────────────────────────────────
@@ -97,7 +101,9 @@ function MainApp() {
     checkApi();
     fetchPersons();
     fetchMessages();
-    loadVideoSrc().then(src => { if (src) setIdleVideoSrc(src); }).catch(() => {});
+    loadVideoSrc()
+      .then(src => setIdleVideoSrc(src || DEFAULT_VIDEO_SRC))
+      .catch(() => setIdleVideoSrc(DEFAULT_VIDEO_SRC));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── API helpers ──────────────────────────────────────────────────────
@@ -483,11 +489,11 @@ function MainApp() {
                       style={{ width: '100%', marginTop: '0.3rem' }}
                       onClick={() => {
                         clearVideo().catch(() => {});
-                        setIdleVideoSrc('');
+                        setIdleVideoSrc(DEFAULT_VIDEO_SRC);
                         channelRef.current?.postMessage({ type: 'set-video', src: '' });
                         setShowVideoPicker(false);
                       }}
-                    >🗑 Remove video</button>
+                    >🗑 Reset to default</button>
                   </div>
                 )}
               </div>
@@ -547,15 +553,7 @@ function MainApp() {
                 {wirelessActive && (
                   <>
                     <p className="wireless-status">🟢 Connected — results updating every 200 ms</p>
-                    {/* Live MJPEG preview with bounding boxes from backend */}
-                    <div className="wireless-preview">
-                      <img
-                        key={wirelessUrl}
-                        src={`${API_URL}/ip-camera/stream?t=${Date.now()}`}
-                        alt="Wireless camera feed"
-                        className="wireless-feed"
-                      />
-                    </div>
+                    <WirelessZonePreview apiUrl={API_URL} wirelessUrl={wirelessUrl} />
                   </>
                 )}
               </div>
@@ -795,5 +793,134 @@ function PopOutMessageCard({ result }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ── WirelessZonePreview ───────────────────────────────────────────────────────
+// Live MJPEG preview with a draggable detection-zone rectangle. The zone is
+// stored normalized (0–1) on the backend; the backend also draws the active
+// zone (cyan box) onto the stream, which is the source of truth.
+function WirelessZonePreview({ apiUrl, wirelessUrl }) {
+  const previewRef     = useRef(null);
+  const dragStartRef   = useRef(null);
+  const [zone,    setZone]    = useState(null);   // saved normalized rect
+  const [draft,   setDraft]   = useState(null);   // rect being drawn
+  const [editing, setEditing] = useState(false);
+
+  // Load any previously saved zone
+  useEffect(() => {
+    fetch(`${apiUrl}/detection-zone`)
+      .then(r => r.json())
+      .then(d => { if (d && 'x1' in d) setZone(d); })
+      .catch(() => {});
+  }, [apiUrl]);
+
+  // Pointer position → normalized 0–1 within the preview box
+  const toNorm = (clientX, clientY) => {
+    const box = previewRef.current?.getBoundingClientRect();
+    if (!box) return null;
+    return {
+      x: Math.min(1, Math.max(0, (clientX - box.left) / box.width)),
+      y: Math.min(1, Math.max(0, (clientY - box.top)  / box.height)),
+    };
+  };
+
+  const onDown = e => {
+    if (!editing) return;
+    const p = toNorm(e.clientX, e.clientY);
+    if (!p) return;
+    dragStartRef.current = p;
+    setDraft({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+  };
+  const onMove = e => {
+    if (!editing || !dragStartRef.current) return;
+    const p = toNorm(e.clientX, e.clientY);
+    if (!p) return;
+    const s = dragStartRef.current;
+    setDraft({ x1: s.x, y1: s.y, x2: p.x, y2: p.y });
+  };
+  const onUp = () => { dragStartRef.current = null; };
+
+  const saveZone = () => {
+    const z = draft || zone;
+    if (!z) return;
+    const norm = {
+      x1: Math.min(z.x1, z.x2), y1: Math.min(z.y1, z.y2),
+      x2: Math.max(z.x1, z.x2), y2: Math.max(z.y1, z.y2),
+    };
+    fetch(`${apiUrl}/detection-zone`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(norm),
+    })
+      .then(() => { setZone(norm); setDraft(null); setEditing(false); })
+      .catch(() => {});
+  };
+
+  const clearZone = () => {
+    fetch(`${apiUrl}/detection-zone`, { method: 'DELETE' })
+      .then(() => { setZone(null); setDraft(null); setEditing(false); })
+      .catch(() => {});
+  };
+
+  const rect = draft || zone;
+
+  return (
+    <>
+      <div
+        className="wireless-preview"
+        ref={previewRef}
+        style={{ position: 'relative', cursor: editing ? 'crosshair' : 'default' }}
+        onMouseDown={onDown}
+        onMouseMove={onMove}
+        onMouseUp={onUp}
+        onMouseLeave={onUp}
+      >
+        <img
+          key={wirelessUrl}
+          src={`${apiUrl}/ip-camera/stream?t=${Date.now()}`}
+          alt="Wireless camera feed"
+          className="wireless-feed"
+          draggable={false}
+        />
+        {rect && (
+          <div
+            className="zone-rect"
+            style={{
+              left:   `${Math.min(rect.x1, rect.x2) * 100}%`,
+              top:    `${Math.min(rect.y1, rect.y2) * 100}%`,
+              width:  `${Math.abs(rect.x2 - rect.x1) * 100}%`,
+              height: `${Math.abs(rect.y2 - rect.y1) * 100}%`,
+            }}
+          />
+        )}
+        {editing && <div className="zone-hint">Drag to draw the detection zone</div>}
+      </div>
+
+      <div className="zone-controls">
+        {!editing ? (
+          <button className="btn-outline" onClick={() => setEditing(true)}>
+            🎯 Set Detection Zone
+          </button>
+        ) : (
+          <>
+            <button className="btn-primary" onClick={saveZone} disabled={!draft && !zone}>
+              Save Zone
+            </button>
+            <button className="btn-outline" onClick={() => { setEditing(false); setDraft(null); }}>
+              Cancel
+            </button>
+          </>
+        )}
+        {zone && !editing && (
+          <button className="btn-danger-sm" onClick={clearZone}>Clear Zone</button>
+        )}
+        <span className="zone-status">
+          {zone
+            ? '🎯 Zone active — only faces inside are detected'
+            : 'No zone — detecting the whole frame'}
+        </span>
+      </div>
+    </>
   );
 }
