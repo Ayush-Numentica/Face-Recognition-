@@ -37,7 +37,7 @@ class FaceRecognitionEngine:
     # Minimum confidence (0–1) required to accept a match.
     # confidence = exp(−euclidean_distance)
     # 0.50 ≈ distance 0.69  |  0.55 ≈ distance 0.60  |  0.60 ≈ distance 0.51
-    CONFIDENCE_THRESHOLD: float = 0.45
+    CONFIDENCE_THRESHOLD: float = 0.43
 
     # FaceNet input size (fixed by the model architecture).
     FACE_SIZE: int = 160
@@ -58,6 +58,11 @@ class FaceRecognitionEngine:
         # so matching is a single vector comparison instead of N comparisons.
         # { "Ayush": mean_emb_array }
         self._mean_embeddings: Dict[str, np.ndarray] = {}
+
+        # Detection zone (Region of Interest), normalized 0–1 as
+        # (x1, y1, x2, y2). None → detect across the whole frame.
+        # Faces whose box center falls outside this rectangle are ignored.
+        self.roi: Optional[Tuple[float, float, float, float]] = None
 
         logger.info("Loading MTCNN face detector …")
         self.detector = MTCNN()
@@ -213,6 +218,34 @@ class FaceRecognitionEngine:
             "distance":   round(best_distance, 4),
         }
 
+    def set_roi(self, roi: Optional[Tuple[float, float, float, float]]) -> None:
+        """
+        Set the detection zone as a normalized (x1, y1, x2, y2) rectangle
+        (each value 0–1). Pass None to detect across the whole frame.
+        """
+        if roi is None:
+            self.roi = None
+            return
+        x1, y1, x2, y2 = roi
+        # Normalize ordering and clamp to [0, 1] so a backwards drag still works.
+        self.roi = (
+            max(0.0, min(x1, x2)),
+            max(0.0, min(y1, y2)),
+            min(1.0, max(x1, x2)),
+            min(1.0, max(y1, y2)),
+        )
+        logger.info("Detection zone set to %s", self.roi)
+
+    def _in_roi(self, box: Tuple[int, int, int, int], img_shape: tuple) -> bool:
+        """True if the center of *box* (x, y, w, h) lies inside self.roi."""
+        if self.roi is None:
+            return True
+        x, y, w, h = box
+        cx = (x + w / 2) / img_shape[1]
+        cy = (y + h / 2) / img_shape[0]
+        rx1, ry1, rx2, ry2 = self.roi
+        return rx1 <= cx <= rx2 and ry1 <= cy <= ry2
+
     def recognize_all(self, bgr_image: np.ndarray) -> List[dict]:
         """
         Detect and identify ALL faces in *bgr_image*.
@@ -225,6 +258,15 @@ class FaceRecognitionEngine:
         faces = self._detect_all_faces(bgr_image)
         if not faces:
             return []
+
+        # Drop faces whose center is outside the detection zone (if set).
+        if self.roi is not None:
+            faces = [
+                (f, box) for (f, box) in faces
+                if self._in_roi(box, bgr_image.shape)
+            ]
+            if not faces:
+                return []
 
         # ── Batch embed all detected faces in one FaceNet forward pass ──
         face_arrays = [self._preprocess(f) for f, _ in faces]

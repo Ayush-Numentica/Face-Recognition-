@@ -47,6 +47,7 @@ DATASET_DIR    = os.path.join(BASE_DIR, "dataset")
 EMBEDDINGS_DIR = os.path.join(BASE_DIR, "embeddings")
 MESSAGES_FILE  = os.path.join(BASE_DIR, "custom_messages.json")
 LOG_FILE       = os.path.join(BASE_DIR, "face_log.json")
+ROI_FILE       = os.path.join(BASE_DIR, "detection_zone.json")
 
 os.makedirs(DATASET_DIR, exist_ok=True)
 os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
@@ -84,26 +85,75 @@ def _save_messages(messages: dict) -> None:
         json.dump(messages, fh, indent=2, ensure_ascii=False)
 
 
-def _append_log(name: str, confidence: float) -> None:
-    logs = []
-    if os.path.exists(LOG_FILE):
+def _load_roi() -> dict:
+    """Return the saved detection zone {x1,y1,x2,y2} or {} if none/invalid."""
+    if os.path.exists(ROI_FILE):
         try:
-            with open(LOG_FILE, "r", encoding="utf-8") as fh:
-                logs = json.load(fh)
+            with open(ROI_FILE, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if all(k in data for k in ("x1", "y1", "x2", "y2")):
+                return data
         except (json.JSONDecodeError, IOError):
-            logs = []
+            pass
+    return {}
 
-    logs.append({
-        "name":       name,
-        "confidence": round(confidence, 4),
-        "timestamp":  datetime.now().isoformat(),
-    })
 
-    # Keep only the latest 1 000 entries to avoid unbounded growth
-    logs = logs[-1000:]
+def _save_roi(roi: dict) -> None:
+    """Persist the detection zone. Pass {} to clear it."""
+    if roi:
+        with open(ROI_FILE, "w", encoding="utf-8") as fh:
+            json.dump(roi, fh, indent=2)
+    elif os.path.exists(ROI_FILE):
+        os.remove(ROI_FILE)
 
-    with open(LOG_FILE, "w", encoding="utf-8") as fh:
-        json.dump(logs, fh, indent=2)
+
+def _apply_roi_to_engine(roi: dict) -> None:
+    """Push a {x1,y1,x2,y2} dict (or {}) onto the recognition engine."""
+    if roi:
+        engine.set_roi((roi["x1"], roi["y1"], roi["x2"], roi["y2"]))
+    else:
+        engine.set_roi(None)
+
+
+# Per-name cooldown so a person standing in view doesn't rewrite the log
+# file dozens of times per second (the recognition loop runs continuously).
+_last_log_time: dict = {}
+_LOG_COOLDOWN_S: float = 10.0
+
+
+def _append_log(name: str, confidence: float) -> None:
+    """
+    Append a recognition event. Throttled per-name and fully guarded so a
+    file-contention error here can NEVER kill the recognition thread.
+    """
+    import time
+    now = time.time()
+    if now - _last_log_time.get(name, 0.0) < _LOG_COOLDOWN_S:
+        return
+    _last_log_time[name] = now
+
+    try:
+        logs = []
+        if os.path.exists(LOG_FILE):
+            try:
+                with open(LOG_FILE, "r", encoding="utf-8") as fh:
+                    logs = json.load(fh)
+            except (json.JSONDecodeError, IOError, ValueError):
+                logs = []
+
+        logs.append({
+            "name":       name,
+            "confidence": round(confidence, 4),
+            "timestamp":  datetime.now().isoformat(),
+        })
+
+        # Keep only the latest 1 000 entries to avoid unbounded growth
+        logs = logs[-1000:]
+
+        with open(LOG_FILE, "w", encoding="utf-8") as fh:
+            json.dump(logs, fh, indent=2)
+    except Exception:
+        logger.exception("Failed to append face log — continuing")
 
 
 # ── IP camera background thread ───────────────────────────────────────────────
@@ -112,6 +162,18 @@ def _draw_boxes_on_frame(frame: np.ndarray, results: list) -> np.ndarray:
     """Draw bounding boxes + labels on frame, same style as the frontend overlay."""
     COLOR_KNOWN   = (0, 230, 118)   # green  (BGR)
     COLOR_UNKNOWN = (68, 23, 255)   # red    (BGR)
+    COLOR_ZONE    = (255, 200, 0)   # cyan-ish (BGR) for the detection zone
+
+    # Draw the active detection zone, if one is set.
+    if engine.roi is not None:
+        fh, fw = frame.shape[:2]
+        rx1, ry1, rx2, ry2 = engine.roi
+        zx1, zy1 = int(rx1 * fw), int(ry1 * fh)
+        zx2, zy2 = int(rx2 * fw), int(ry2 * fh)
+        cv2.rectangle(frame, (zx1, zy1), (zx2, zy2), COLOR_ZONE, 2)
+        cv2.putText(frame, "DETECTION ZONE", (zx1 + 6, max(18, zy1 + 22)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, COLOR_ZONE, 1, cv2.LINE_AA)
+
     for r in results:
         if not r.get("box"):
             continue
@@ -133,34 +195,64 @@ def _ip_cam_capture_loop(url: str) -> None:
     global _ip_cam_active, _ip_cam_frame, _ip_cam_raw_frame
     import time
 
+    def _open():
+        # Force TCP + a socket timeout so a stalled RTSP stream RETURNS an
+        # error instead of blocking cap.read() forever. Without this, a
+        # silent stream stall freezes the thread until a full restart.
+        # 5_000_000 µs = 5s. Must be set before VideoCapture is created.
+        if url.lower().startswith("rtsp"):
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                "rtsp_transport;tcp|stimeout;5000000"
+            )
+        c = cv2.VideoCapture(url)
+        try:
+            c.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # minimize latency / stale frames
+        except Exception:
+            pass
+        return c
+
     logger.info("IP camera capture thread started: %s", url)
-    cap = cv2.VideoCapture(url)
+    cap = _open()
     if not cap.isOpened():
         logger.error("Cannot open IP camera stream: %s", url)
         _ip_cam_active = False
         return
 
+    fail = 0
     while _ip_cam_active:
-        ret, frame = cap.read()
-        if not ret:
-            logger.warning("IP camera: lost frame, retrying…")
-            time.sleep(0.5)
-            cap.open(url)
-            continue
+        try:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                fail += 1
+                logger.warning("IP camera: no frame (attempt %d) — reconnecting…", fail)
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                time.sleep(min(3.0, 0.5 * fail))   # backoff, capped at 3s
+                cap = _open()
+                continue
+            fail = 0
 
-        # Grab latest results without holding the lock during encode
-        with _ip_cam_lock:
-            results = list(_ip_cam_result)
-            _ip_cam_raw_frame = frame.copy()
+            # Grab latest results without holding the lock during encode
+            with _ip_cam_lock:
+                results = list(_ip_cam_result)
+                _ip_cam_raw_frame = frame.copy()
 
-        # Draw boxes and encode — done outside the lock
-        annotated = _draw_boxes_on_frame(frame.copy(), results)
-        _, jpeg = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 72])
+            # Draw boxes and encode — done outside the lock
+            annotated = _draw_boxes_on_frame(frame.copy(), results)
+            ok, jpeg = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 72])
+            if ok:
+                with _ip_cam_lock:
+                    _ip_cam_frame = jpeg.tobytes()
+        except Exception:
+            logger.exception("IP camera capture cycle failed — continuing")
+            time.sleep(0.3)
 
-        with _ip_cam_lock:
-            _ip_cam_frame = jpeg.tobytes()
-
-    cap.release()
+    try:
+        cap.release()
+    except Exception:
+        pass
     logger.info("IP camera capture thread stopped.")
 
 
@@ -171,28 +263,32 @@ def _ip_cam_recog_loop() -> None:
 
     logger.info("IP camera recognition thread started.")
     while _ip_cam_active:
-        with _ip_cam_lock:
-            frame = _ip_cam_raw_frame
+        try:
+            with _ip_cam_lock:
+                frame = _ip_cam_raw_frame
 
-        if frame is None:
-            time.sleep(0.05)
-            continue
+            if frame is None:
+                time.sleep(0.05)
+                continue
 
-        results = engine.recognize_all(frame)
-        messages = _load_messages()
-        for r in results:
-            name = r.get("name", "Unknown")
-            if name in messages:
-                r["message"] = messages[name]
-            elif name != "Unknown":
-                r["message"] = f"Welcome {name}!"
-            else:
-                r["message"] = messages.get("Unknown", "Unknown person detected")
-            if name not in ("Unknown",):
-                _append_log(name, r.get("confidence", 0.0))
+            results = engine.recognize_all(frame)
+            messages = _load_messages()
+            for r in results:
+                name = r.get("name", "Unknown")
+                if name in messages:
+                    r["message"] = messages[name]
+                elif name != "Unknown":
+                    r["message"] = f"Welcome {name}!"
+                else:
+                    r["message"] = messages.get("Unknown", "Unknown person detected")
+                if name not in ("Unknown",):
+                    _append_log(name, r.get("confidence", 0.0))
 
-        with _ip_cam_lock:
-            _ip_cam_result = results
+            with _ip_cam_lock:
+                _ip_cam_result = results
+        except Exception:
+            logger.exception("IP camera recognition cycle failed — continuing")
+            time.sleep(0.2)
 
     logger.info("IP camera recognition thread stopped.")
 
@@ -478,6 +574,53 @@ def update_messages():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/detection-zone", methods=["GET"])
+def get_detection_zone():
+    """Return the current detection zone {x1,y1,x2,y2} (normalized), or {}."""
+    return jsonify(_load_roi())
+
+
+@app.route("/detection-zone", methods=["POST"])
+def set_detection_zone():
+    """
+    Set the detection zone. Body: { x1, y1, x2, y2 } each 0–1 (normalized).
+    Send an empty object {} to clear the zone (detect whole frame).
+    """
+    try:
+        data = request.get_json(force=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Expected a JSON object"}), 400
+
+        if not data:
+            _save_roi({})
+            _apply_roi_to_engine({})
+            return jsonify({"message": "Detection zone cleared.", "zone": {}})
+
+        try:
+            roi = {k: float(data[k]) for k in ("x1", "y1", "x2", "y2")}
+        except (KeyError, TypeError, ValueError):
+            return jsonify({"error": "Need numeric x1, y1, x2, y2"}), 400
+
+        for v in roi.values():
+            if not 0.0 <= v <= 1.0:
+                return jsonify({"error": "Values must be between 0 and 1"}), 400
+
+        _save_roi(roi)
+        _apply_roi_to_engine(roi)
+        return jsonify({"message": "Detection zone saved.", "zone": roi})
+    except Exception as exc:
+        logger.exception("Error in /detection-zone")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/detection-zone", methods=["DELETE"])
+def clear_detection_zone():
+    """Remove the detection zone — recognition reverts to the whole frame."""
+    _save_roi({})
+    _apply_roi_to_engine({})
+    return jsonify({"message": "Detection zone cleared."})
+
+
 @app.route("/face-log", methods=["GET"])
 def face_log():
     """Return the last 100 recognition events, most-recent first."""
@@ -513,5 +656,11 @@ if __name__ == "__main__":
 
     # Load (or build) embeddings before accepting requests
     engine.load_embeddings()
+
+    # Restore the saved detection zone, if any
+    _saved_roi = _load_roi()
+    if _saved_roi:
+        _apply_roi_to_engine(_saved_roi)
+        logger.info("  Detection zone restored: %s", _saved_roi)
 
     app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
